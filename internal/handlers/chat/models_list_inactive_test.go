@@ -67,4 +67,12 @@ func TestHandleModels_DefaultModeIgnoresOnlyInactiveConnections(t *testing.T) {
 		t.Errorf("with no active connection the default mode (%d models) must match ?connected=1 (%d models) — the issue asks for the noAuth subset, not a different list",
 			len(disabled.Data), len(connected.Data))
 	}
+
+	// ?all=1 promises to ignore connections entirely, so it must NOT follow the
+	// default mode into the noAuth subset just because every connection is off.
+	// It exists precisely to reach past that state and dump the whole catalog.
+	if len(catalog.Data) <= len(connected.Data) {
+		t.Errorf("?all=1 returned %d models, which is not more than the connected subset (%d) — catalog mode must stay unfiltered",
+			len(catalog.Data), len(connected.Data))
+	}
 }

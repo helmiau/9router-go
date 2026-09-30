@@ -373,7 +373,7 @@ func (h *ChatHandler) buildModelsListForMode(
 	// operator explicitly switched off. A provider whose rows are ALL inactive
 	// still publishes nothing, since filterConnected keeps it out of the dump.
 	catalogWhenEmpty := len(activeConns) == 0
-	if catalogWhenEmpty && len(allConns) > 0 && !filterConnected {
+	if catalogWhenEmpty && len(allConns) > 0 && !filterConnected && mode != modeListCatalog {
 		filterConnected = true
 	}
 
