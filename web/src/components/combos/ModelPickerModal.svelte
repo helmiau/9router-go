@@ -9,6 +9,7 @@
     resolveModelPickerGroups,
   } from './pickerData'
   import { parseCustomModelsResponse, parseDisabledModelsMap } from '../../lib/customModels'
+  import { createGroupWindow, groupWindow, measureGroup } from './groupWindow'
 
   interface Props {
     isOpen: boolean
@@ -81,6 +82,78 @@
   let filteredGroups = $derived(
     resolveFilteredGroups(groups, searchQuery, target, addedModelValues)
   )
+
+  // Mounting every group meant ~890 pills and 111-131ms to come back to the
+  // full list on every keystroke back to an empty search (measured). Only the
+  // groups near the viewport are mounted; each one still renders as one intact
+  // block, so the list looks identical. A searched list is left fully rendered -
+  // the results are small (~142 pills, ~13ms) and the user needs to see all.
+  let groupState = createGroupWindow()
+  let groupIds = $derived(filteredGroups.map((g) => g.id))
+  let scrollTop = $state(0)
+  let viewportHeight = $state(0)
+  let combosHeight = $state(0)
+  let scrollEl: HTMLDivElement | undefined = $state()
+  let windowed = $derived(!searchQuery.trim())
+  // Bumped whenever a measurement lands, so the window recomputes. Assigning
+  // `scrollTop = scrollTop` would be a no-op that Svelte never propagates.
+  let measureTick = $state(0)
+
+  // The Combos block sits above the provider groups inside the same scroll
+  // container, so it has to be part of the offset maths. Leaving it out is what
+  // made the earlier attempt drift: the window was computed against a scroll
+  // position that included space nothing had accounted for.
+  let listOffset = $derived(combosHeight)
+  let gwin = $derived.by(() => {
+    void measureTick // recompute once a measured height changes
+    // 0 disables the window (see groupWindow), so pass it while searching: the
+    // results are small and the user needs to see every one of them.
+    const vp = windowed ? viewportHeight : 0
+    return groupWindow(groupState.heights, groupIds, scrollTop - listOffset, vp)
+  })
+  let visibleGroups = $derived(
+    windowed ? filteredGroups.slice(gwin.start, gwin.end) : filteredGroups
+  )
+  // Spacers sit inside the scroll container, below the Combos block.
+  let topSpacer = $derived(windowed ? gwin.topSpacer : 0)
+  let bottomSpacer = $derived(windowed ? gwin.bottomSpacer : 0)
+
+  // Measure the viewport once the modal is on screen. Waiting for a scroll event
+  // never fires until the user interacts, and an unknown viewport deliberately
+  // renders everything, so this has to happen on mount.
+  $effect(() => {
+    if (!isOpen || !scrollEl) return
+    const measure = () => {
+      viewportHeight = scrollEl!.clientHeight
+    }
+    measure()
+    const raf = requestAnimationFrame(measure)
+    return () => cancelAnimationFrame(raf)
+  })
+
+  function handleScroll(e: Event) {
+    const el = e.currentTarget as HTMLDivElement
+    scrollTop = el.scrollTop
+    viewportHeight = el.clientHeight
+  }
+
+  function observeGroup(node: HTMLElement, id: string) {
+    const ro = new ResizeObserver((entries) => {
+      const h = entries[0]?.contentRect.height
+      if (h && measureGroup(groupState, id, h)) measureTick += 1
+    })
+    ro.observe(node)
+    return () => ro.disconnect()
+  }
+
+  function observeCombos(node: HTMLElement) {
+    const ro = new ResizeObserver((entries) => {
+      const h = entries[0]?.contentRect.height
+      if (h && combosHeight !== h) combosHeight = h
+    })
+    ro.observe(node)
+    return () => ro.disconnect()
+  }
 
   function handleToggle(val: string) {
     if (addedModelValues.includes(val)) {
@@ -160,11 +233,19 @@
         </div>
       </div>
 
-      <!-- Categories & Models List -->
-      <div class="max-h-[400px] overflow-y-auto space-y-3 custom-scrollbar">
-        <!-- Combos section - always first -->
+      <!-- Categories & Models List.
+           Windowed per provider group: the container reserves the full height
+           through the two spacers, and only the groups near the viewport are
+           mounted. Each mounted group is still one intact block, so the list is
+           visually unchanged. -->
+      <div
+        bind:this={scrollEl}
+        onscroll={handleScroll}
+        class="max-h-[400px] overflow-y-auto custom-scrollbar"
+      >
+        <!-- Combos section - always first, above the windowed groups -->
         {#if filteredCombos.length > 0}
-          <div>
+          <div use:observeCombos>
             <div class="flex items-center gap-1.5 mb-1.5 sticky top-0 bg-surface py-0.5 z-10">
               <span class="text-xs font-medium text-brand-500">Combos</span>
               <span class="text-[10px] text-text-muted">({filteredCombos.length})</span>
@@ -182,9 +263,11 @@
           </div>
         {/if}
 
+        <div style="height:{topSpacer}px" aria-hidden="true"></div>
+
         <!-- Provider sections -->
-        {#each filteredGroups as group (group.id)}
-          <div>
+        {#each visibleGroups as group (group.id)}
+          <div class="mb-3" use:observeGroup={group.id}>
             <div class="flex items-center gap-1.5 mb-1.5 sticky top-0 bg-surface py-0.5 z-10">
               <img
                 src={getIconPath(group.id)}
@@ -215,6 +298,8 @@
             </div>
           </div>
         {/each}
+
+        <div style="height:{bottomSpacer}px" aria-hidden="true"></div>
 
         {#if filteredCombos.length === 0 && filteredGroups.length === 0}
           <div class="text-center py-4 text-text-muted">
