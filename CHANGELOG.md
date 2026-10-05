@@ -73,6 +73,22 @@ nilai `inherit` sebagai **satu-satunya** cara menghapus override, dan
 (`effectiveComboStrategy`) agar combo yang mewarisi fusion tetap menampilkan
 ikon fusion, sementara nilai select tetap menampilkan `inherit`.
 
+**Utang svelte-check juga berkurang dua.** `ComboCard` belum pernah punya
+entri baseline, jadi saat file itu disentuh tiga error lamanya ikut terhitung:
+`{#each}` yang mengadeklarasikan indeks tak terpakai, dan `title` pada dua
+ikon lucide yang bukan props-nya. Ketiganya diperbaiki (`aria-label` +
+`role="img"` sebagai pengganti `title`), bukan dilewati dengan menaikkan
+baseline — sesuai `AGENTS.md` §6.E. Baseline `svelte-check` turun dari **91 ke
+89**.
+
+**Verifikasi:** `go vet ./internal/...` bersih · `go test -count=1 ./...`
+hijau · `bun run build` + `bun run ratchet:svelte` (0 unresolved identifier,
+89 error, baseline diturunkan) · `bun test` 219 pass. Smoke ke binary asli di
+`DATA_DIR` terisolasi: routing `bai/probe` dijawab upstream, dan
+`agnes/agnes-3.0-flash` dengan `image_url` meneruskan URL gambar utuh ke
+upstream — perilaku yang sebelumnya mustahil karena `Vision:false`.
+
+
 
 
 ### 🩹 Pembacaan usage yang gagal diam-diam dilaporkan sebagai nol — dashboard Usage & Analytics

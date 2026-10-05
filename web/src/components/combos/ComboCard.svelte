@@ -101,14 +101,14 @@
           {#if modelsList.length === 0}
             <span class="text-xs text-text-muted italic">No models</span>
           {:else}
-            {#each modelsList.slice(0, 3) as model, i}
+            {#each modelsList.slice(0, 3) as model}
               <code class="inline-flex items-center gap-1 rounded bg-black/5 dark:bg-white/5 px-1.5 py-0.5 font-mono text-xs text-text-muted">
                 <span>{model}</span>
                 {#if hasVision(model)}
-                  <Eye class="w-3 h-3 text-blue-500 shrink-0" title="Vision — Supports image input" />
+                  <Eye class="w-3 h-3 text-blue-500 shrink-0" role="img" aria-label="Vision — supports image input" />
                 {/if}
                 {#if hasReasoning(model)}
-                  <Sparkles class="w-3 h-3 text-amber-500 shrink-0" title="Reasoning — Supports reasoning / thinking" />
+                  <Sparkles class="w-3 h-3 text-amber-500 shrink-0" role="img" aria-label="Reasoning — supports reasoning / thinking" />
                 {/if}
               </code>
             {/each}
