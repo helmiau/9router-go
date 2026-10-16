@@ -5,6 +5,82 @@
 > **Target**: `https://github.com/luqman-v1/9router-go` (Go 1.27 + Chi + Uber Fx + Svelte 5, SQLite WAL, single-binary)
 > **Status**: Analisis & spesifikasi siap implementasi
 
+> **BACA BAGIAN INI DULU.** Beberapa fitur di bawah sudah selesai di 9router-go; jangan dikerjakan ulang.
+
+---
+
+## Status & Rencana Eksekusi (2026-10-16)
+
+**Koreksi sumber.** Dokumen ini ditulis 2026-10-07 dari klon KeiRouter `3d8b702` (fork `helmiau`, 2026-09-08). Upstream `mydisha/keirouter` kini `0918b9e` (**v0.2.0**, 2026-10-13): **20 commit di depan, 453 file berubah**, +3 paket (`audit`, `errclass`, `skills`) dan +4 migrasi (`0030`–`0033`). Worktree baca-saja upstream: `D:/GithubRepository/keirouter-upstream`. Semua status di bawah diverifikasi ulang ke kode 9router-go `d995986` (1.9.14-exp.1), bukan dari dokumen ini.
+
+### A. Status per fitur (terverifikasi 2026-10-16)
+
+| # | Fitur | Status | Bukti |
+|---|-------|--------|-------|
+| F-1 | Rate limit per-key (RPM/TPM/konkurensi + antrean) | **SELESAI** | `internal/middleware/ratelimit.go:888-894`; kuota token `:762`; kolom `internal/db/schema.go:279-285` |
+| F-2 | Budget USD + hard-cutoff | **PARSIAL** | hanya `tokenQuota` seumur hidup — tanpa periode, `alert_pct`, cutoff 402; `usageHistory.cost` masih telemetri |
+| F-3 | Plans (template reusable) | **BELUM** | `grep PlanRepo\|type Plan` = 0; tak ada tabel `plans`, tak ada `apiKeys.planId` |
+| F-4 | Guardrails | **SELESAI (MVP)** | `internal/guardrails/detectors.go:31,62` (PII + injeksi), `middleware.go`, `resolver.go`, `outbound.go`; tanpa toxicity/topics/bias |
+| F-5 | Credential vault AES-GCM | **SELESAI** | `internal/vault/vault.go`; kolom tersegel `schema.go:272-277` |
+| F-6 | Argon2id key hashing | **SELESAI** | `internal/keikey/apikey.go:1-45`; jalur auth `internal/middleware/auth.go:102-107`; kolom `schema.go:287-289` |
+| F-7 | Model access per-key (allowlist + wildcard) | **SELESAI** | repo `internal/db/modelaccess.go:24`; gate `internal/handlers/chat/access.go:134,159`; API `dashboard/apikeys_models.go`; route `router.go:245-246`; UI `web/src/components/keys/ApiKeyPolicyModal.svelte:333` |
+| F-8 | Portal penggunaan publik | BELUM | — |
+| F-9 | Response cache | **SELESAI** (melampaui KeiRouter) | `internal/semanticcache/cache.go:17-51` (LRU + TTL 24 jam + ambang kemiripan 0,95); wiring `handlers/chat/chat.go:111`, `forward.go:423` |
+| F-10 | Prometheus `/metrics` | **SELESAI** | `internal/observ/metrics.go:1-45`; route `internal/handlers/router.go:248` |
+| F-11 | Multi-tenant | TUNDA | — |
+| F-12 | System tray | SKIP | — |
+| F-13 | Terse / token saver | **SELESAI** | `internal/tokensaver/` |
+| F-14 | Metadata resale (expiry/usedCount/metadata) | **SELESAI** | `schema.go:291-294`; `dashboard/apikeys_policy.go:47-60` |
+| F-15 | Branding white-label | BELUM | — |
+
+**Kesimpulan:** dari Tier A, hanya **F-3 (Plans)** yang belum ada dan **F-2 (Budget)** yang parsial. F-7 sudah tuntas end-to-end, jadi ia tidak lagi jadi PR tersendiri — cukup diwarisi lewat plan.
+
+### B. Rencana eksekusi — scope terpilih: Plans + Budget + Model-access
+
+Dua PR berurutan, keduanya branch dari `origin/main` dan PR ke `main` (AGENTS.md §7.7).
+
+**PR-1 — F-3 Plans (payung policy).**
+
+1. Skema (`internal/db/schema.go`): tambah tabel `plans` ke `keiRouterTables` (`:299`) — `id, tenantId, name, description, limitMicros, limitTokens, rpmLimit, tpmLimit, concurrencyLimit, period, alertPct, hardCutoff, allowedModels, createdAt, updatedAt`; tambah `{"apiKeys","planId","TEXT DEFAULT ''"}` ke `goOnlyColumns` (`:268`); seed satu plan `default` dengan literal RFC3339 (bukan `datetime('now')`, agar portabel).
+2. Repo baru `internal/db/plans.go` mengikuti pola `internal/db/modelaccess.go`: `Create/Get/List/Update/Delete/CountKeys`, plus pembacaan massal satu query untuk daftar key.
+3. Resolver baru `internal/policy/policy.go` — `Resolve(key)` menggabungkan plan → override key (nilai key > 0 menang). **Satu** tempat resolusi, dipakai ratelimit, budget, dan model access; jangan duplikasi logika di tiap middleware.
+4. Middleware `internal/middleware/ratelimit.go:888-894` membaca hasil resolver, bukan kolom key langsung; kolom key tetap berlaku sebagai override.
+5. API dashboard `internal/handlers/dashboard/plans.go` — `GET/POST/PUT/DELETE /api/plans`; route di `internal/handlers/router.go` dekat `:245`.
+6. UI: `web/src/components/plans/PlansView.svelte` + klien `web/src/api/client.ts` (pola `:1123`); `ApiKeyPolicyModal.svelte:132` menambah pemilih plan sehingga `planId` ikut terkirim.
+7. Uji: tabel kasus `Resolve` (tanpa plan, override key, warisan `allowedModels`). **Wajib** menambah `planId` ke fixture `apiKeys` yang ditulis tangan — `internal/handlers/dashboard/dashboard_test.go`, `internal/db/dashboard_test.go`, `internal/db/repos_test.go`, `internal/middleware/auth_test.go` — kalau tidak: `no such column: planId`.
+
+**PR-2 — F-2 Budget (enforcement).**
+
+1. Kolom `goOnlyColumns`: `limitMicros INTEGER DEFAULT 0`, `budgetPeriod TEXT DEFAULT 'monthly'`, `alertPct INTEGER DEFAULT 80`, `hardCutoff INTEGER DEFAULT 1`.
+2. Belanja dihitung dari `usageHistory` dalam jendela periode (jumlah biaya × 1e6 → micros; jumlah token) — tanpa counter terpisah dan tanpa job reset, berbeda dari KeiRouter yang memakai Redis.
+3. Middleware `internal/middleware/budget.go` dipasang setelah ratelimit: 402 saat `hardCutoff` terlampaui, header peringatan saat `alertPct` lewat.
+4. Reservasi in-flight (map + mutex, mengikuti `budget/budget.go` KeiRouter) supaya N permintaan paralel tidak menembus batas.
+5. Endpoint `GET /api/keys/{id}/budget` (belanja + sisa) dan indikator di UI.
+6. Uji: batas tepat di limit, pergantian periode, `hardCutoff=0` (hanya peringatan), reservasi paralel.
+
+**Alasan urutan:** plan adalah payung yang memuat limit RPM/TPM/konkurensi, kuota token, dan `allowedModels`; budget membaca policy hasil resolver yang sama, jadi mengerjakannya lebih dulu berarti menulis enforcement dua kali.
+
+### C. Backlog baru dari delta v0.2.0 (belum ada di dokumen ini)
+
+| Fitur upstream | Commit / migrasi | Nilai | Verdict |
+|----------------|------------------|-------|---------|
+| Audit trail tamper-evident + ekspor OTLP (OpenTelemetry Protocol) | `6cae829`, `0032_audit_log_otel.sql` | Tinggi (kepatuhan) | Ambil |
+| Paket `skills` operator (blok instruksi per scope key/plan/model) | `backend/internal/skills/skills.go` | Sedang | Ambil (kecil) |
+| `errclass` klasifikasi error agnostik-provider | `backend/internal/errclass/` | Sedang | Ambil |
+| Meter: cache-write 1 jam + tagihan web search | `c6885de`, `0031` | Sedang | Ambil |
+| Usage: `chain_id`/`fallback_count` + hasil guardrail per request | `0030`, `0033` | Sedang | Ambil |
+| Leksikon toksisitas Indonesia + corpus test | `024bd84` | Sedang | Ambil (murah) |
+| Topik berbasis LLM (Large Language Model) | `fae103d` | Sedang | Nanti |
+| ML (Machine Learning) classifier injeksi + LLM judge + sidecar PromptGuard | `11bf55b` | Tinggi | Tunda (butuh deploy Python) |
+
+### D. Jebakan yang sudah diketahui
+
+- Fixture `apiKeys` yang ditulis tangan tidak mengikuti `goOnlyColumns`; setiap kolom baru harus ditambahkan di keempat berkas uji pada PR-1 langkah 7.
+- Uang disimpan sebagai **micros integer**; konversi dari `usageHistory.cost REAL` dilakukan di satu helper, jangan dicampur float.
+- Semua skema baru lewat `goOnlyColumns`/`keiRouterTables` (`internal/db/schema.go:268,299`) — tabel milik upstream tidak boleh diubah.
+- Setiap PR menulis satu fragmen `.changes/<nomor-pr>-<slug>.md`; `CHANGELOG.md` tidak disentuh (AGENTS.md §7.6).
+
+---
 ---
 
 ## 0. Ruang Lingkup
