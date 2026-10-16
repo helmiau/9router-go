@@ -19,7 +19,7 @@
 |---|-------|--------|-------|
 | F-1 | Rate limit per-key (RPM/TPM/konkurensi + antrean) | **SELESAI** | `internal/middleware/ratelimit.go:888-894`; kuota token `:762`; kolom `internal/db/schema.go:279-285` |
 | F-2 | Budget USD + hard-cutoff | **PARSIAL** | hanya `tokenQuota` seumur hidup — tanpa periode, `alert_pct`, cutoff 402; `usageHistory.cost` masih telemetri |
-| F-3 | Plans (template reusable) | **BELUM** | `grep PlanRepo\|type Plan` = 0; tak ada tabel `plans`, tak ada `apiKeys.planId` |
+| F-3 | Plans (template reusable) | **SELESAI** (PR #354) | resolver tunggal `internal/policy/policy.go`; repo `internal/db/plans.go`; tabel `plans` + `apiKeys.planId` di `internal/db/schema.go`; API `internal/handlers/dashboard/plans.go`; UI `web/src/components/plans/PlansView.svelte` |
 | F-4 | Guardrails | **SELESAI (MVP)** | `internal/guardrails/detectors.go:31,62` (PII + injeksi), `middleware.go`, `resolver.go`, `outbound.go`; tanpa toxicity/topics/bias |
 | F-5 | Credential vault AES-GCM | **SELESAI** | `internal/vault/vault.go`; kolom tersegel `schema.go:272-277` |
 | F-6 | Argon2id key hashing | **SELESAI** | `internal/keikey/apikey.go:1-45`; jalur auth `internal/middleware/auth.go:102-107`; kolom `schema.go:287-289` |
@@ -33,15 +33,15 @@
 | F-14 | Metadata resale (expiry/usedCount/metadata) | **SELESAI** | `schema.go:291-294`; `dashboard/apikeys_policy.go:47-60` |
 | F-15 | Branding white-label | BELUM | — |
 
-**Kesimpulan:** dari Tier A, hanya **F-3 (Plans)** yang belum ada dan **F-2 (Budget)** yang parsial. F-7 sudah tuntas end-to-end, jadi ia tidak lagi jadi PR tersendiri — cukup diwarisi lewat plan.
+**Kesimpulan:** dari Tier A, **F-3 (Plans) sudah selesai** (PR #354) dan **F-2 (Budget) masih parsial** — itu PR berikutnya. F-7 sudah tuntas end-to-end, jadi ia tidak lagi jadi PR tersendiri: allowlist-nya kini diwarisi lewat plan (union).
 
 ### B. Rencana eksekusi — scope terpilih: Plans + Budget + Model-access
 
 F-7 sudah tuntas end-to-end (lihat §A), jadi scope tersisa = **2 PR berurutan** ke `main` (AGENTS.md §7.7), branch dari `origin/main`. Detail desain per fitur tetap ada di §2 (F-3, F-2) — bagian ini menegaskan urutan, cakupan, dan definisi selesai. Bagian §3 (Rekomendasi Roadmap lama) **ditimpa** oleh bagian ini untuk scope yang dipilih.
 
-#### B1. PR-1 — F-3 Plans (payung policy) — estimasi 1–1,5 hari
+#### B1. PR-1 — F-3 Plans (payung policy) — **SELESAI (PR #354)**
 
-1. **Skema.** Tabel `plans` di `keiRouterTables` (`internal/db/schema.go:299`): `id TEXT PRIMARY KEY`, `tenant_id TEXT NOT NULL DEFAULT 'default'`, `name`, `description`, `limitMicros INTEGER DEFAULT 0`, `limitTokens INTEGER DEFAULT 0`, `rpmLimit`, `tpmLimit`, `concurrencyLimit INTEGER DEFAULT 0`, `period TEXT DEFAULT 'monthly'` (enum `daily|weekly|monthly|total`), `alertPct INTEGER DEFAULT 80`, `hardCutoff INTEGER DEFAULT 1`, `allowedModels TEXT DEFAULT ''` (dipisah koma), `created_at`, `updated_at` (RFC3339 UTC, mengikuti `0015_plans.sql`). `goOnlyColumns` (`:268`) += `{"apiKeys","planId","TEXT DEFAULT ''"}`. Seed: satu plan `default` dengan literal RFC3339 (bukan `datetime('now')`, agar portabel) + `UPDATE apiKeys SET planId='default' WHERE planId=''`.
+1. **Skema.** Tabel `plans` di `keiRouterTables` (`internal/db/schema.go`): `id TEXT PRIMARY KEY`, `tenant_id TEXT NOT NULL DEFAULT 'default'`, `name`, `description`, `limit_micros INTEGER NOT NULL DEFAULT 0`, `limit_tokens INTEGER NOT NULL DEFAULT 0`, `rpm_limit`, `tpm_limit`, `concurrency_limit INTEGER NOT NULL DEFAULT 0`, `period TEXT NOT NULL DEFAULT 'monthly'` (enum `daily|weekly|monthly|total`), `alert_pct INTEGER NOT NULL DEFAULT 80`, `hard_cutoff INTEGER NOT NULL DEFAULT 1`, `allowed_models TEXT DEFAULT ''` (dipisah koma), `created_at`, `updated_at` (RFC3339 UTC, mengikuti `0015_plans.sql`). `goOnlyColumns` += `{"apiKeys","planId","TEXT DEFAULT ''"}`. Seed: satu plan `default` dengan literal RFC3339 (bukan `datetime('now')`, agar portabel), disisipkan di `EnsureKeiRouterTables` sehingga setiap jalur bootstrap ikut memilikinya. **Divergensi dari draft awal:** `UPDATE apiKeys SET planId='default' WHERE planId=''` sengaja **tidak** dijalankan — plan `default` semuanya nol jadi perilaku key yang ada tidak berubah, sementara backfill akan menambah satu bacaan plan per request untuk setiap key. Key baru cukup dipetakan lewat `PUT /api/keys/{id}` dengan `planId`.
 2. **Repo.** `internal/db/plans.go` — `Create/Get/List/Update/Delete/CountKeys`, mengikuti pola `internal/db/modelaccess.go` (termasuk pembacaan massal satu query `GetPlansForKeys` untuk daftar key).
 3. **Resolver.** `internal/policy/policy.go` — `Resolve(key *models.APIKey) EffectivePolicy`. Algoritma: mulai dari nol → timpa dari plan (bila `planId` ada dan plan ditemukan) → timpa dengan kolom key bila nilainya > 0. `EffectivePolicy` = `{PlanID, RPM, TPM, Concurrency, QueueTimeoutMs, TokenQuota, LimitMicros, LimitTokens, BudgetPeriod, AlertPct, HardCutoff, AllowedModels}`. Satu-satunya sumber kebenaran; dipanggil ratelimit (`internal/middleware/ratelimit.go:888-894`), budget (B2), dan model-gate (`internal/handlers/chat/access.go:52`) — **tidak boleh** ada logika limit yang tersebar.
 4. **Middleware.** Rate limit membaca `policy.RPM/TPM/Concurrency`; kolom key lama tetap berlaku hanya sebagai override eksplisit (nilai > 0).
