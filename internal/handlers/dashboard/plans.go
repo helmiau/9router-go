@@ -97,7 +97,7 @@ func (h *DashboardHandler) HandleCreatePlan(w http.ResponseWriter, r *http.Reque
 		handlerutil.WriteJSONError(w, http.StatusBadRequest, "failed to read request body")
 		return
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	var req planRequest
 	if err := json.Unmarshal(body, &req); err != nil {
@@ -154,7 +154,7 @@ func (h *DashboardHandler) HandleUpdatePlan(w http.ResponseWriter, r *http.Reque
 		handlerutil.WriteJSONError(w, http.StatusBadRequest, "failed to read request body")
 		return
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	existing, err := h.Repo.GetPlan(id)
 	if err != nil {

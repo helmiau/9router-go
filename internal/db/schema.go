@@ -510,7 +510,7 @@ func EnsureKeiRouterTables(db *sql.DB) error {
 	// path that creates the plans table also guarantees the row exists, so a
 	// key assigned to "default" always resolves to a plan instead of silently
 	// reading as unplanned. INSERT OR IGNORE keeps it stable across boots.
-	if _, err := db.Exec(
+	if _, err := db.Exec( //nolint:noctx
 		`INSERT OR IGNORE INTO plans (id, tenant_id, name, description, limit_micros, limit_tokens, rpm_limit, tpm_limit, concurrency_limit, period, alert_pct, hard_cutoff, allowed_models, created_at, updated_at)
 		 VALUES ('default', 'default', 'Default', 'Default plan for existing keys', 0, 0, 0, 0, 0, 'monthly', 80, 0, '', ?, ?)`,
 		time.Now().UTC().Format(time.RFC3339),

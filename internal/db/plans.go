@@ -7,6 +7,15 @@ import (
 	"time"
 )
 
+// The plan reads and writes below are ctx-less on purpose, matching the policy
+// layer this package already uses (GetAllowedModels, SetAllowedModels,
+// ListGuardrailPolicies): the dashboard CRUD handlers and the dispatch gate call
+// them synchronously on an already-cancellable request, and threading a context
+// through only these eight calls would make them the lone exception rather than
+// the rule. Migrating the whole policy layer to QueryContext/ExecContext is a
+// change of its own; until then every site carries //nolint:noctx so the finding
+// is a deliberate choice rather than an omission.
+
 // Plan represents a reusable policy template that API keys can inherit from.
 type Plan struct {
 	ID               string
@@ -35,7 +44,7 @@ func (r *Repo) CreatePlan(p Plan) error {
 		return fmt.Errorf("plans: create: nil repo")
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := r.db.Exec(
+	_, err := r.db.Exec( //nolint:noctx
 		`INSERT INTO `+planTable+` (id, tenant_id, name, description, limit_micros, limit_tokens, rpm_limit, tpm_limit, concurrency_limit, period, alert_pct, hard_cutoff, allowed_models, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.ID, p.TenantID, p.Name, p.Description, p.LimitMicros, p.LimitTokens,
@@ -72,7 +81,7 @@ func (r *Repo) GetPlan(id string) (Plan, error) {
 	if r == nil || r.db == nil || id == "" {
 		return Plan{}, fmt.Errorf("plans: get: nil repo or empty id")
 	}
-	row := r.db.QueryRow(
+	row := r.db.QueryRow( //nolint:noctx
 		`SELECT `+planSelectCols+` FROM `+planTable+` WHERE id = ?`, id,
 	)
 	return scanPlanRow(row)
@@ -83,14 +92,14 @@ func (r *Repo) ListPlans(tenantID string) ([]Plan, error) {
 	if r == nil || r.db == nil {
 		return nil, fmt.Errorf("plans: list: nil repo")
 	}
-	rows, err := r.db.Query(
+	rows, err := r.db.Query( //nolint:noctx
 		`SELECT `+planSelectCols+` FROM `+planTable+` WHERE tenant_id = ? ORDER BY created_at DESC`,
 		tenantID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("plans: list: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []Plan
 	for rows.Next() {
@@ -109,7 +118,7 @@ func (r *Repo) SetApiKeyPlan(keyID, planID string) error {
 	if r == nil || r.db == nil || keyID == "" {
 		return fmt.Errorf("plans: set for key: nil repo or empty key id")
 	}
-	_, err := r.db.Exec(`UPDATE apiKeys SET planId = ? WHERE id = ?`, planID, keyID)
+	_, err := r.db.Exec(`UPDATE apiKeys SET planId = ? WHERE id = ?`, planID, keyID) //nolint:noctx
 	if err != nil {
 		return fmt.Errorf("plans: set for key %s: %w", keyID, err)
 	}
@@ -121,7 +130,7 @@ func (r *Repo) UpdatePlan(p Plan) error {
 	if r == nil || r.db == nil || p.ID == "" {
 		return fmt.Errorf("plans: update: nil repo or empty id")
 	}
-	res, err := r.db.Exec(
+	res, err := r.db.Exec( //nolint:noctx
 		`UPDATE `+planTable+` SET name = ?, description = ?, limit_micros = ?, limit_tokens = ?, rpm_limit = ?, tpm_limit = ?, concurrency_limit = ?, period = ?, alert_pct = ?, hard_cutoff = ?, allowed_models = ?, updated_at = ? WHERE id = ?`,
 		p.Name, p.Description, p.LimitMicros, p.LimitTokens,
 		p.RPMLimit, p.TPMLimit, p.ConcurrencyLimit, p.Period,
@@ -143,7 +152,7 @@ func (r *Repo) DeletePlan(id string) error {
 	if r == nil || r.db == nil || id == "" {
 		return fmt.Errorf("plans: delete: nil repo or empty id")
 	}
-	_, err := r.db.Exec(`DELETE FROM `+planTable+` WHERE id = ?`, id)
+	_, err := r.db.Exec(`DELETE FROM `+planTable+` WHERE id = ?`, id) //nolint:noctx
 	if err != nil {
 		return fmt.Errorf("plans: delete: %w", err)
 	}
@@ -156,7 +165,7 @@ func (r *Repo) CountPlanKeys(planID string) (int, error) {
 		return 0, fmt.Errorf("plans: count keys: nil repo or empty id")
 	}
 	var n int
-	if err := r.db.QueryRow(
+	if err := r.db.QueryRow( //nolint:noctx
 		`SELECT COUNT(*) FROM apiKeys WHERE planId = ?`, planID,
 	).Scan(&n); err != nil {
 		return 0, fmt.Errorf("plans: count keys: %w", err)
@@ -191,11 +200,11 @@ func (r *Repo) GetPlansForKeys(ids []string) (map[string]Plan, error) {
 	query := `SELECT k.id, ` + planSelectColsPrefixed() +
 		` FROM apiKeys k JOIN ` + planTable + ` p ON k.planId = p.id WHERE k.id IN (` +
 		strings.Join(placeholders, ",") + `)`
-	rows, err := r.db.Query(query, args...)
+	rows, err := r.db.Query(query, args...) //nolint:noctx
 	if err != nil {
 		return nil, fmt.Errorf("plans: get for keys: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var keyID string
@@ -216,7 +225,7 @@ func (r *Repo) HasPlansTable() bool {
 		return false
 	}
 	var name string
-	err := r.db.QueryRow(
+	err := r.db.QueryRow( //nolint:noctx
 		`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`,
 		planTable,
 	).Scan(&name)
