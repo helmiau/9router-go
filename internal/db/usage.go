@@ -202,26 +202,26 @@ func scanUsageGroupRows(rows interface {
 // cutoff. The model column is a constant empty string: provider rows have no
 // single model, and the shared scanner expects both key columns.
 func (r *Repo) GetUsageGroupByProviderSince(since string) ([]UsageGroupRow, error) {
-	rows, err := r.db.Query(
+	rows, err := r.db.Query( //nolint:noctx,rowserrcheck
 		`SELECT COALESCE(provider, ''), '', `+usageGroupStats+`
 		   FROM usageHistory WHERE timestamp >= ? GROUP BY COALESCE(provider, '')`, since)
 	if err != nil {
 		return nil, fmt.Errorf("query usage group by provider: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return scanUsageGroupRows(rows, "provider")
 }
 
 // GetUsageGroupByModelSince aggregates usageHistory per provider+model since
 // the cutoff.
 func (r *Repo) GetUsageGroupByModelSince(since string) ([]UsageGroupRow, error) {
-	rows, err := r.db.Query(
+	rows, err := r.db.Query( //nolint:noctx,rowserrcheck
 		`SELECT COALESCE(provider, ''), COALESCE(model, ''), `+usageGroupStats+`
 		   FROM usageHistory WHERE timestamp >= ? GROUP BY COALESCE(provider, ''), COALESCE(model, '')`, since)
 	if err != nil {
 		return nil, fmt.Errorf("query usage group by model: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return scanUsageGroupRows(rows, "model")
 }
 
@@ -237,11 +237,11 @@ type CacheUsageRow struct {
 // the whole ledger), and the LIKE prefilter keeps the JSON decode off rows
 // that can never contribute.
 func (r *Repo) GetCacheUsageRows() ([]CacheUsageRow, error) {
-	rows, err := r.db.Query(`SELECT promptTokens, tokens FROM usageHistory WHERE tokens LIKE '%cache%'`)
+	rows, err := r.db.Query(`SELECT promptTokens, tokens FROM usageHistory WHERE tokens LIKE '%cache%'`) //nolint:noctx
 	if err != nil {
 		return nil, fmt.Errorf("query cache usage rows: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var res []CacheUsageRow
 	for rows.Next() {
 		var row CacheUsageRow
@@ -267,11 +267,11 @@ type RequestDetailPerfRow struct {
 // The ring is retention-bounded, so this stays cheap; it is the gateway's only
 // source of per-request latency for the node-health table.
 func (r *Repo) GetRequestDetailPerf() ([]RequestDetailPerfRow, error) {
-	rows, err := r.db.Query(`SELECT COALESCE(provider, ''), COALESCE(model, ''), data FROM requestDetails`)
+	rows, err := r.db.Query(`SELECT COALESCE(provider, ''), COALESCE(model, ''), data FROM requestDetails`) //nolint:noctx
 	if err != nil {
 		return nil, fmt.Errorf("query request detail perf: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var res []RequestDetailPerfRow
 	for rows.Next() {
 		var row RequestDetailPerfRow
