@@ -884,6 +884,20 @@ export interface CompressionAnalyticsSummary {
   roiTokensPerMs?: number
   topSavers?: CompressionTopSaver[]
 }
+/** Jailbreak: the default injected document (upstream decolua/9router parity). */
+export interface JailbreakDoc {
+  prompt: string
+  geminiSafety: boolean
+  source?: string
+  id?: string
+  name?: string
+}
+
+/** One model's binding: whether injection is armed and which preset it uses. */
+export interface JailbreakModelConfig {
+  enabled: boolean
+  presetId: string
+}
 
 export function isAuthenticated(): boolean {
   if (typeof window === 'undefined') return false
@@ -2158,4 +2172,27 @@ export const api = {
     sessionStorage.removeItem('9router_auth')
     localStorage.removeItem('9router_auth')
   },
+  // Jailbreak
+  getJailbreak: () => request<JailbreakDoc>('/api/jailbreak'),
+  saveJailbreak: (doc: { prompt: string; geminiSafety: boolean; source?: string }) =>
+    request<{ success: boolean }>('/api/jailbreak', {
+      method: 'PUT',
+      body: JSON.stringify(doc),
+    }),
+  listJailbreakPresets: () => request<JailbreakDoc[]>('/api/jailbreak/presets'),
+  saveJailbreakPreset: (preset: { id?: string; name: string; prompt: string; geminiSafety: boolean; source?: string }) =>
+    request<{ success: boolean }>('/api/jailbreak/presets', {
+      method: 'PUT',
+      body: JSON.stringify(preset),
+    }),
+  deleteJailbreakPreset: (id: string) =>
+    request<{ success: boolean }>(`/api/jailbreak/presets/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+  listJailbreakModels: () => request<Record<string, JailbreakModelConfig>>('/api/jailbreak/models'),
+  setJailbreakModel: (id: string, presetId: string, enabled: boolean) =>
+    request<{ success: boolean }>('/api/jailbreak/models', {
+      method: 'PUT',
+      body: JSON.stringify({ id, presetId, enabled }),
+    }),
 }
