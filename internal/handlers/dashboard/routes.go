@@ -140,6 +140,15 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		r.Delete("/guardrails/policies/{id}", h.HandleDeleteGuardrailPolicy)
 		r.Get("/guardrails/logs", h.HandleListGuardrailLogs)
 
+		// Jailbreak: agent prompt presets library; per-model preset binding.
+		r.Get("/jailbreak", h.HandleGetJailbreak)
+		r.Put("/jailbreak", h.HandlePutJailbreak)
+		r.Get("/jailbreak/presets", h.HandleListJailbreakPresets)
+		r.Put("/jailbreak/presets", h.HandlePutJailbreakPreset)
+		r.Delete("/jailbreak/presets/{id}", h.HandleDeleteJailbreakPreset)
+		r.Get("/jailbreak/models", h.HandleListJailbreakModels)
+		r.Put("/jailbreak/models", h.HandleSetJailbreakModel)
+
 		// Models
 		r.Get("/models/custom", h.HandleGetCustomModels)
 		r.Get("/models/caps", h.HandleGetModelCaps)
