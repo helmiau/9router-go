@@ -103,15 +103,14 @@
         settled = true
         clearTimeout(timer)
         data = res
+        loading = false
       })
       .catch(() => {
         if (cancelled || settled) return
         settled = true
         clearTimeout(timer)
         failed = true
-      })
-      .finally(() => {
-        if (!cancelled && !settled) loading = false
+        loading = false
       })
     return () => {
       cancelled = true

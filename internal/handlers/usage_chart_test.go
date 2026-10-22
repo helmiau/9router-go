@@ -91,13 +91,13 @@ func setupChartTestDB(t *testing.T) *db.Repo {
 	}
 	repo := db.NewRepo(conn)
 	t.Cleanup(func() { conn.Close() })
-	if err := repo.UpsertUsageDaily("2026-10-16", `{"promptTokens":1000,"completionTokens":500,"cost":1.5}`); err != nil {
-		t.Fatalf("seed usageDaily: %v", err)
-	}
-	if err := repo.InsertUsageHistory("openai", "gpt-5", "conn-1", "sk-1", "/v1/chat/completions",
-		100, 50, 1.5, "ok", 150, "{}", "{}"); err != nil {
-		t.Fatalf("seed usageHistory: %v", err)
-	}
+if err := repo.UpsertUsageDaily(time.Now().UTC().Format("2006-01-02"), `{"promptTokens":1000,"completionTokens":500,"cost":1.5}`); err != nil {
+	t.Fatalf("seed usageDaily: %v", err)
+}
+if err := repo.InsertUsageHistory("openai", "gpt-5", "conn-1", "sk-1", "/v1/chat/completions",
+	100, 50, 1.5, "ok", 150, "{}", "{}"); err != nil {
+	t.Fatalf("seed usageHistory: %v", err)
+}
 	return repo
 }
 

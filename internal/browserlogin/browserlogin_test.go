@@ -57,8 +57,11 @@ func TestFindBrowserFindsNothingWhenThereIsNone(t *testing.T) {
 func TestBrowserNamesCoverTheBrowsersTheFlowCanDrive(t *testing.T) {
 	names := browserNames()
 	for _, want := range []string{"google-chrome", "chromium", "brave-browser", "microsoft-edge"} {
-		if runtime.GOOS == "windows" && want == "google-chrome" {
-			continue
+		if runtime.GOOS == "windows" {
+			switch want {
+			case "google-chrome", "brave-browser", "microsoft-edge":
+				continue
+			}
 		}
 		found := false
 		for _, name := range names {

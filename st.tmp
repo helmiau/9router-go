@@ -1,0 +1,24 @@
+D  .changes/506-usage-hidden-panels-no-load.md
+M  .changes/510-usage-hidden-panels-no-load.md
+AA .changes/544-bulk-model-colon-valid-char.md
+D  04-usage-chart-timeout.png
+R  01-usage-overview.png -> docs/screenshots/01-usage-overview.png
+R  04-usage-cache.png -> docs/screenshots/04-usage-cache.png
+ M internal/browserlogin/browserlogin_test.go
+ M internal/handlers/chat/combo.go
+ M internal/handlers/suggestedmodels.go
+ M internal/handlers/suggestedmodels_test.go
+ M internal/handlers/usage_chart_test.go
+ M internal/mitm/handlers/base.go
+ M internal/providers/providers.go
+ M internal/proxy/executor/providers.go
+ M internal/proxy/executor/stream.go
+M  web/src/components/analytics/UsageDashboard.svelte
+ M web/src/components/connections/ProviderDetailView.svelte
+ M web/src/lib/models.test.ts
+ M web/src/lib/providers.ts
+?? .changes/511-combo-error-body-json-escape.md
+?? .changes/559-commandcode-live-catalog.md
+?? internal/handlers/chat/combo_error_body_test.go
+?? internal/providers/commandcode_catalog_test.go
+?? st.tmp

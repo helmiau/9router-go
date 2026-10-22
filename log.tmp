@@ -1,0 +1,3 @@
+756f0c1 docs: add screenshots for PR #510 (hidden panel + timeout states)
+1fd3b8f fix(usage): gate CompressionAnalyticsView with panel visibility (#510)
+a19816c fix(usage): hidden panels no longer fetch or show loading cards
