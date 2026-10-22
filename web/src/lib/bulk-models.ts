@@ -25,9 +25,10 @@ const SEPARATORS = /[\s,;]+/
 // INVALID_PATTERN is what a model id may not contain. The server decides this
 // authoritatively (the id becomes half of a "<provider>/<id>" address a client
 // copies into its config); the client only refuses the obvious shapes early
-// enough to say so before a round trip: a slash (the alias separator), a pipe
-// (the kv key separator), quotes and angle brackets.
-const INVALID_PATTERN = /[/|"'`\\<>]/
+// enough to say so before a round trip: a pipe (the kv key separator), quotes
+// and angle brackets. A slash is valid in an id because the kv key delimiter
+// is "|", not "/", so "anthropic/claude-sonnet-4-6" is accepted.
+const INVALID_PATTERN = /[|"'`\\<>]/
 
 /**
  * parseModelIds splits a pasted list into the ids worth saving.

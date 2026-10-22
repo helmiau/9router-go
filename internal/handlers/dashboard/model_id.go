@@ -19,8 +19,10 @@ const (
 	// boundary between ids. An id containing one is a paste that was never split.
 	modelIDSeparators = " \t\r\n,;"
 	// modelIDReserved are the characters with a meaning in an address or in the kv key
-	// that stores the model: "/" separates prefix from id, "|" separates key fields.
-	modelIDReserved = `/|"'` + "`" + `\<>`
+	// that stores the model: "|" separates key fields; slash ("/") is NOT reserved here
+	// because the kv key delimiter is "|", not "/", and custom model ids like
+	// "anthropic/claude-sonnet-4-6" (OpenRouter) or "x/llama-3.3-70b" (Grok) are valid.
+	modelIDReserved = `|"'` + "`" + `\<>`
 )
 
 // invalidModelIDReason reports why id cannot be stored as a custom model id, or "" when
@@ -33,7 +35,7 @@ func invalidModelIDReason(id string) string {
 		return "whitespace, comma and semicolon separate ids; this id was never split"
 	}
 	if strings.ContainsAny(id, modelIDReserved) {
-		return `an id cannot contain / | " ' \ < > or a backtick`
+		return `an id cannot contain | " ' \ < > or a backtick`
 	}
 	if len(id) > modelIDMaxLength {
 		return "an id cannot be longer than 200 characters"
