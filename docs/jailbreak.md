@@ -117,11 +117,23 @@ To exempt a model from *all* presets, put it in the **Global exclude list**
 instead.
 
 
-## 4b. Import a collection from GitHub
+## 4b. Three ways to fill a preset
+
+A prompt can reach a preset three ways, and all three end in the same place:
+
+| How | Where | What it does |
+| --- | --- | --- |
+| Write it by hand | **Jailbreak → + New preset**, the prompt textarea | you type or paste; nothing is derived for you |
+| Upload a file | **Jailbreak → Import from GitHub → …or upload a prompt file** | the file name becomes the preset name and its keyword chain |
+| Point at a URL | the same card's input | a repository, a directory, or one file |
+
+The rest of this section covers the URL and upload paths.
+
+### From a URL
 
 A repository that keeps one prompt per file — the shape
 [togg53192-cmd/jailbreaks](https://github.com/togg53192-cmd/jailbreaks) uses —
-can be pulled in whole. In **Jailbreak → Import from GitHub**, enter any of:
+can be pulled in whole. Enter any of:
 
 | Input | Meaning |
 | --- | --- |
@@ -154,6 +166,22 @@ them, so refreshing a collection is safe. Imported presets are live the moment
 they land: a request for a model they cover is injected. Delete a preset, or
 add the id to the global exclude list, to stop that.
 
+### From an uploaded file
+
+The file input in the same card takes one `.md`, `.markdown` or `.txt` file at a
+time and writes it as a preset. It follows exactly the same derivation as the
+URL path, so `deepseek v4.md` becomes preset `deepseek-v4` with keywords
+`deepseek`, `deepseek-v4`, whatever folder it came from. Only the base name of
+the file is used, so a client cannot name a preset after a directory, and an
+empty file is refused rather than stored as a blank prompt.
+
+The ceiling is the same 512 KB as a typed prompt, and the response names the
+preset it wrote together with the keywords it derived.
+
+Writing by hand is the path to reach for when the prompt is yours rather than a
+file's: nothing is derived, so the preset matches nothing until you add a
+keyword or bind an id.
+
 ## 5. Limits
 
 | Thing | Limit |
@@ -179,6 +207,7 @@ typo never becomes a preset that silently stops matching.
 | `GET` | `/api/jailbreak/excludes` | the global exclude list |
 | `PUT` | `/api/jailbreak/excludes` | replace the global exclude list |
 | `POST` | `/api/jailbreak/import-github` | import a repository of prompts as presets (`{"target":"owner/repo"}`) |
+| `POST` | `/api/jailbreak/presets/upload` | create one preset from an uploaded file (`multipart/form-data`, field `file`) |
 
 The model id travels in the request body rather than the path, because ids
 contain `/` and `:` (`tkh/mimo-v2.6-flash:free`) and a path parameter stores

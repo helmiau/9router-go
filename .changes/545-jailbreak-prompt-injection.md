@@ -101,3 +101,34 @@
   and the handler's 400-versus-502 mapping; a live import of
   `togg53192-cmd/jailbreaks` wrote its presets and injected a request for
   `deepseek v4` on a provider the collection never names.
+
+### Upload a prompt file, and three ways to fill a preset
+
+- `POST /api/jailbreak/presets/upload` takes one file as
+  `multipart/form-data` (field `file`) and writes it as a preset, so a prompt
+  kept as a file lands without being pasted. It shares the derivation with the
+  GitHub import — same id, name, source marker and keyword chain — because both
+  paths end in one function rather than two conventions.
+- The request is bounded before it is parsed, so a multipart body cannot stream
+  past the ceiling into memory; a file past 512 KB is 413, an empty file is 400
+  with the reason, and a missing or non-multipart body is 400. Only the base
+  name of the uploaded file is used, so a client cannot name a preset after a
+  directory.
+- Dashboard: a file input in the import card, with the result shown the same way
+  as a GitHub import. The import card now documents all three ways to fill a
+  preset — write by hand, upload a file, point at a URL — and the manual path
+  stays the only one that derives nothing.
+- `request()` in the API client no longer forces `Content-Type:
+  application/json` when the body is a `FormData`, which is what makes the
+  upload reachable from the dashboard at all.
+- Registered in both route tables (`internal/handlers/router.go` for
+  production, `dashboard.RegisterRoutes` for tests).
+- Verified: `go test ./internal/handlers/dashboard/...` covers the upload
+  writing a preset with the derived chain and resolving for
+  `providerx/deepseek-v4`, a client-supplied path being reduced to its base
+  name, an empty file and a missing file field being 400, a JSON body being
+  400, and a file past the ceiling being 413; `bun run build`, `bun test src
+  scripts` (523 tests) and the svelte-check ratchet all hold. Live: all three
+  paths exercised against the running gateway — a raw.githubusercontent.com
+  file URL, a `curl -F` upload, and a hand-written `PUT /api/jailbreak/presets`
+  — each writing a preset that injects on its model.
