@@ -193,7 +193,7 @@ func (h *ChatHandler) handleSingleModel(ctx context.Context, w http.ResponseWrit
 	requestedModel, _ := upstreamBody["model"].(string)
 	upstreamBody["model"] = modelInfo.Model
 	repairToolCallIDsInMap(upstreamBody)
-	ctx = h.applyJailbreak(ctx, upstreamBody, requestedModel)
+	ctx = h.applyJailbreak(ctx, upstreamBody, requestedModel, jailbreakLegIDs(modelInfo.Provider, modelInfo.Model)...)
 	upstreamJSON, err := json.Marshal(upstreamBody)
 	if err != nil {
 		handlerutil.WriteJSONError(w, http.StatusInternalServerError, "failed to marshal upstream request")
@@ -351,7 +351,7 @@ func (h *ChatHandler) handleMessagesSingleModel(ctx context.Context, w http.Resp
 	// resolved upstream model first, then inject against the original id.
 	requestedModel, _ := translatedReq["model"].(string)
 	translatedReq["model"] = modelInfo.Model
-	ctx = h.applyJailbreak(ctx, translatedReq, requestedModel)
+	ctx = h.applyJailbreak(ctx, translatedReq, requestedModel, jailbreakLegIDs(modelInfo.Provider, modelInfo.Model)...)
 	finalBody, err := json.Marshal(translatedReq)
 	if err != nil {
 		handlerutil.WriteJSONError(cw, http.StatusInternalServerError, "failed to marshal translated request")

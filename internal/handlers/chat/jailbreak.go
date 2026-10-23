@@ -8,18 +8,19 @@ import (
 	"9router/proxy/internal/translator"
 )
 
-// resolveJailbreak returns the injection document for a model, or nil when
-// nothing should be injected: a toggle left off, or an armed model with an
-// empty document, both mean pass-through. The key is the model id exactly as
-// the client sent it — the same id /v1/models lists — so the dashboard toggle
-// and the request always name the same thing.
-func (h *ChatHandler) resolveJailbreak(requestedModel string) *db.JailbreakDoc {
-	if h.Repo == nil || requestedModel == "" {
+// resolveJailbreak returns the injection document for a request, or nil when
+// nothing should be injected. ids are the candidate model ids in specificity
+// order — the id the client sent first, then the ids the request is forwarded
+// to — and the resolver applies exact bindings, keyword rules, and the
+// exclude lists (see internal/db/jailbreak_keywords.go for the precedence).
+// An empty document means pass-through, exactly like a toggle left off.
+func (h *ChatHandler) resolveJailbreak(ids ...string) *db.JailbreakDoc {
+	if h.Repo == nil {
 		return nil
 	}
-	doc, err := h.Repo.GetJailbreakDocForModel(requestedModel)
+	doc, err := h.Repo.ResolveJailbreakDoc(ids...)
 	if err != nil {
-		log.Warn("jailbreak", "doc lookup failed", "model", requestedModel, "error", err)
+		log.Warn("jailbreak", "doc lookup failed", "ids", ids, "error", err)
 		return nil
 	}
 	if doc == nil || doc.Prompt == "" {
@@ -28,15 +29,17 @@ func (h *ChatHandler) resolveJailbreak(requestedModel string) *db.JailbreakDoc {
 	return doc
 }
 
-// applyJailbreak mutates the outbound request body for a model whose toggle is
-// on and returns a context carrying the Gemini-safety flag for the forward
-// chain. Called before the body is marshalled, so the prompt-cache hash always
-// reflects the injected prompt. Every forward path calls this: single chat,
-// Claude single, combo fallback, Claude combo, fusion panel, fusion judge. For
-// combo and fusion, requestedModel is the combo name the client sent — arming
-// it arms every leg of that combo.
-func (h *ChatHandler) applyJailbreak(ctx context.Context, body map[string]any, requestedModel string) context.Context {
-	doc := h.resolveJailbreak(requestedModel)
+// applyJailbreak mutates the outbound request body for a request that resolves
+// to a document and returns a context carrying the Gemini-safety flag for the
+// forward chain. Called before the body is marshalled, so the prompt-cache hash
+// always reflects the injected prompt. Every forward path calls this: single
+// chat, Claude single, combo fallback, Claude combo, fusion panel, fusion
+// judge. requestedModel is the id the client sent — a model id, or the combo
+// name, which arms every leg of that combo. legIDs are the ids the request is
+// actually forwarded to, so a keyword such as "deepseek" covers a combo leg
+// like providerx/deepseek-4-pro without arming that id.
+func (h *ChatHandler) applyJailbreak(ctx context.Context, body map[string]any, requestedModel string, legIDs ...string) context.Context {
+	doc := h.resolveJailbreak(append([]string{requestedModel}, legIDs...)...)
 	if doc == nil {
 		return ctx
 	}
@@ -47,6 +50,13 @@ func (h *ChatHandler) applyJailbreak(ctx context.Context, body map[string]any, r
 		ctx = translator.WithGeminiSafety(ctx, true)
 	}
 	return ctx
+}
+
+// jailbreakLegIDs returns the two ids a forwarded leg answers to: the
+// "provider/model" form the dashboard and /v1/models use, and the bare model
+// the upstream body carries. A keyword or exclude matches either.
+func jailbreakLegIDs(provider, model string) []string {
+	return []string{provider + "/" + model, model}
 }
 
 // prependSystemPrompt injects the configured prompt ahead of the original

@@ -891,12 +891,30 @@ export interface JailbreakDoc {
   source?: string
   id?: string
   name?: string
+  /** Models matching one of these rules resolve to this preset. */
+  keywords?: JailbreakKeyword[]
+  /** Models matching one of these rules never get this preset. */
+  excludes?: JailbreakKeyword[]
+}
+
+/**
+ * One model filter rule, shared by the include and exclude lists.
+ * `mode` is `word` (default, whole token), `partial` (substring) or `regex`.
+ */
+export interface JailbreakKeyword {
+  text: string
+  mode?: string
 }
 
 /** One model's binding: whether injection is armed and which preset it uses. */
 export interface JailbreakModelConfig {
   enabled: boolean
   presetId: string
+}
+
+/** The global exclude list: models matching these rules are never injected. */
+export interface JailbreakExcludes {
+  excludes: JailbreakKeyword[]
 }
 
 export function isAuthenticated(): boolean {
@@ -2174,13 +2192,27 @@ export const api = {
   },
   // Jailbreak
   getJailbreak: () => request<JailbreakDoc>('/api/jailbreak'),
-  saveJailbreak: (doc: { prompt: string; geminiSafety: boolean; source?: string }) =>
+  saveJailbreak: (doc: {
+    prompt: string
+    geminiSafety: boolean
+    source?: string
+    keywords?: JailbreakKeyword[]
+    excludes?: JailbreakKeyword[]
+  }) =>
     request<{ success: boolean }>('/api/jailbreak', {
       method: 'PUT',
       body: JSON.stringify(doc),
     }),
   listJailbreakPresets: () => request<JailbreakDoc[]>('/api/jailbreak/presets'),
-  saveJailbreakPreset: (preset: { id?: string; name: string; prompt: string; geminiSafety: boolean; source?: string }) =>
+  saveJailbreakPreset: (preset: {
+    id?: string
+    name: string
+    prompt: string
+    geminiSafety: boolean
+    source?: string
+    keywords?: JailbreakKeyword[]
+    excludes?: JailbreakKeyword[]
+  }) =>
     request<{ success: boolean }>('/api/jailbreak/presets', {
       method: 'PUT',
       body: JSON.stringify(preset),
@@ -2194,5 +2226,12 @@ export const api = {
     request<{ success: boolean }>('/api/jailbreak/models', {
       method: 'PUT',
       body: JSON.stringify({ id, presetId, enabled }),
+
+    }),
+  getJailbreakExcludes: () => request<JailbreakExcludes>('/api/jailbreak/excludes'),
+  saveJailbreakExcludes: (excludes: JailbreakKeyword[]) =>
+    request<JailbreakExcludes>('/api/jailbreak/excludes', {
+      method: 'PUT',
+      body: JSON.stringify({ excludes }),
     }),
 }

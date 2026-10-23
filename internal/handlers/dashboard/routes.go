@@ -134,6 +134,8 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		r.Delete("/jailbreak/presets/{id}", h.HandleDeleteJailbreakPreset)
 		r.Get("/jailbreak/models", h.HandleListJailbreakModels)
 		r.Put("/jailbreak/models", h.HandleSetJailbreakModel)
+		r.Get("/jailbreak/excludes", h.HandleGetJailbreakExcludes)
+		r.Put("/jailbreak/excludes", h.HandlePutJailbreakExcludes)
 
 		// Models
 		r.Get("/models/custom", h.HandleGetCustomModels)
