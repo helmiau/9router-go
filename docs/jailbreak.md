@@ -116,6 +116,44 @@ neither does `deepseekia`.
 To exempt a model from *all* presets, put it in the **Global exclude list**
 instead.
 
+
+## 4b. Import a collection from GitHub
+
+A repository that keeps one prompt per file — the shape
+[togg53192-cmd/jailbreaks](https://github.com/togg53192-cmd/jailbreaks) uses —
+can be pulled in whole. In **Jailbreak → Import from GitHub**, enter any of:
+
+| Input | Meaning |
+| --- | --- |
+| `owner/repo` | every prompt file in the default branch |
+| `owner/repo@branch` | the same, from a named branch, tag or sha |
+| `https://github.com/owner/repo` | the repository |
+| `…/tree/ref/path` | one directory of it |
+| `…/blob/ref/file.md` | one file |
+| `https://raw.githubusercontent.com/owner/repo/ref/file.md` | one file |
+
+Each `.md` or `.txt` file becomes a preset named after the file, and its
+keywords are derived from that name: `deepseek v4.md` yields the chain
+`deepseek`, `deepseek-v4`. Resolution prefers the longest matching rule, so the
+file named after a model wins over a sibling that only shares the family token,
+while `providerx/deepseek-v4` resolves exactly as `deepseek-v4` does. A file
+whose name is longer than the model id (`kimi-k3-agents.md` for `kimi-k3`) still
+resolves, because the chain reaches the shorter id.
+
+Skipped, and reported by name in the result: `README*`, anything under a
+dot-directory such as `.github`, non-`.md`/`.txt` files, files past 512 KB, and
+anything past 200 files or 8 MB in one import. A file that fails to download
+does not stop the rest — the import reports it and continues.
+
+Only GitHub hosts are reachable, redirects included: the target is operator
+input, and following it anywhere would turn the dashboard into a proxy for the
+gateway's own network.
+
+Re-running an import updates the presets it wrote rather than duplicating
+them, so refreshing a collection is safe. Imported presets are live the moment
+they land: a request for a model they cover is injected. Delete a preset, or
+add the id to the global exclude list, to stop that.
+
 ## 5. Limits
 
 | Thing | Limit |
@@ -140,6 +178,7 @@ typo never becomes a preset that silently stops matching.
 | `PUT` | `/api/jailbreak/models` | bind or unbind one id |
 | `GET` | `/api/jailbreak/excludes` | the global exclude list |
 | `PUT` | `/api/jailbreak/excludes` | replace the global exclude list |
+| `POST` | `/api/jailbreak/import-github` | import a repository of prompts as presets (`{"target":"owner/repo"}`) |
 
 The model id travels in the request body rather than the path, because ids
 contain `/` and `:` (`tkh/mimo-v2.6-flash:free`) and a path parameter stores

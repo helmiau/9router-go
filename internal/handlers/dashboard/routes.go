@@ -29,6 +29,10 @@ type DashboardHandler struct {
 	// is optional: a handler built outside a boot (tests, tooling) has none, and
 	// the live usage fields then read zero rather than being invented.
 	Limiter *middleware.RateLimiter
+	// jailbreakImport fetches prompt collections from GitHub for the preset
+	// library. Nil means the production importer; a test points it at an
+	// httptest server.
+	jailbreakImport *jailbreakImporter
 }
 
 // NewDashboardHandler initializes a DashboardHandler with the provided Repo.
@@ -42,6 +46,14 @@ func NewDashboardHandler(repo *db.Repo, ts ...*shared.TokenSaverConfig) *Dashboa
 		h.TokenSaver = ts[0]
 	}
 	return h
+}
+
+// importer returns the configured GitHub importer, or the production one.
+func (h *DashboardHandler) importer() *jailbreakImporter {
+	if h.jailbreakImport != nil {
+		return h.jailbreakImport
+	}
+	return defaultJailbreakImporter
 }
 
 // getURLParam retrieves a route parameter from Chi URLParam or standard PathValue.
@@ -136,6 +148,7 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		r.Put("/jailbreak/models", h.HandleSetJailbreakModel)
 		r.Get("/jailbreak/excludes", h.HandleGetJailbreakExcludes)
 		r.Put("/jailbreak/excludes", h.HandlePutJailbreakExcludes)
+		r.Post("/jailbreak/import-github", h.HandleImportJailbreakGithub)
 
 		// Models
 		r.Get("/models/custom", h.HandleGetCustomModels)
