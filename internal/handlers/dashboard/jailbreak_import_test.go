@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -399,8 +400,8 @@ func TestJailbreakImportReportsRefusals(t *testing.T) {
 	if !strings.Contains(reasons["missing.md"], "status 404") {
 		t.Fatalf("missing.md reason = %q, want the 404", reasons["missing.md"])
 	}
-	if reasons["empty.md"] != "file is empty" {
-		t.Fatalf("empty.md reason = %q, want \"file is empty\"", reasons["empty.md"])
+	if !strings.Contains(reasons["empty.md"], errJailbreakEmptyPrompt.Error()) {
+		t.Fatalf("empty.md reason = %q, want the empty-prompt reason", reasons["empty.md"])
 	}
 }
 
@@ -513,4 +514,155 @@ func setupTestRouterWithHandler(h *DashboardHandler) chi.Router {
 	r := chi.NewRouter()
 	RegisterRoutes(r, h)
 	return r
+}
+
+// uploadRequest builds a multipart body the way the browser's FormData does,
+// so the endpoint is exercised through the same parser production uses.
+func uploadRequest(t *testing.T, field, filename, content string) (*http.Request, *multipart.Writer) {
+	t.Helper()
+	body := &bytes.Buffer{}
+	mw := multipart.NewWriter(body)
+	fw, err := mw.CreateFormFile(field, filename)
+	if err != nil {
+		t.Fatalf("CreateFormFile: %v", err)
+	}
+	if _, err := fw.Write([]byte(content)); err != nil {
+		t.Fatalf("write part: %v", err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/jailbreak/presets/upload", body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	return req, mw
+}
+
+// An uploaded file is the third way to fill a preset, and it follows the same
+// derivation as a GitHub import rather than inventing a second convention.
+func TestHandleUploadJailbreakPreset(t *testing.T) {
+	t.Run("writes the preset with the derived keyword chain", func(t *testing.T) {
+		repo, cleanup := setupTestDB(t)
+		defer cleanup()
+		router := setupTestRouterWithHandler(NewDashboardHandler(repo))
+
+		req, _ := uploadRequest(t, "file", "deepseek v4.md", "UPLOADED RULE")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+		}
+		var out struct {
+			Ok     bool                 `json:"ok"`
+			Preset jailbreakImportEntry `json:"preset"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("decode: %v (%s)", err, rec.Body.String())
+		}
+		if out.Preset.ID != "deepseek-v4" || out.Preset.Name != "deepseek v4" {
+			t.Fatalf("preset = %+v, want id deepseek-v4 and name \"deepseek v4\"", out.Preset)
+		}
+		if strings.Join(out.Preset.Keywords, ",") != "deepseek,deepseek-v4" {
+			t.Fatalf("keywords = %v, want the derived chain", out.Preset.Keywords)
+		}
+		doc, err := repo.GetJailbreakPreset("deepseek-v4")
+		if err != nil {
+			t.Fatalf("read back: %v", err)
+		}
+		if doc == nil || doc.Prompt != "UPLOADED RULE" {
+			t.Fatalf("stored preset = %+v, want the uploaded prompt", doc)
+		}
+		if doc.Source != "upload:deepseek v4.md" {
+			t.Fatalf("source = %q, want the upload marker", doc.Source)
+		}
+		// And it resolves for the model it names, on any provider.
+		resolved, err := repo.ResolveJailbreakDoc("providerx/deepseek-v4")
+		if err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
+		if resolved == nil || resolved.Prompt != "UPLOADED RULE" {
+			t.Fatalf("resolved = %+v, want the uploaded prompt", resolved)
+		}
+	})
+
+	t.Run("a client-supplied path cannot name the preset", func(t *testing.T) {
+		repo, cleanup := setupTestDB(t)
+		defer cleanup()
+		router := setupTestRouterWithHandler(NewDashboardHandler(repo))
+
+		req, _ := uploadRequest(t, "file", "../../etc/passwd.md", "TRAVERSAL RULE")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+		}
+		presets, err := repo.ListJailbreakPresets()
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if len(presets) != 1 || presets[0].ID != "passwd" {
+			t.Fatalf("presets = %+v, want one preset named after the base name only", presets)
+		}
+	})
+
+	t.Run("an empty file is refused with the reason", func(t *testing.T) {
+		repo, cleanup := setupTestDB(t)
+		defer cleanup()
+		router := setupTestRouterWithHandler(NewDashboardHandler(repo))
+
+		req, _ := uploadRequest(t, "file", "blank.md", "   \n\t")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
+		}
+		presets, err := repo.ListJailbreakPresets()
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if len(presets) != 0 {
+			t.Fatalf("presets = %+v, want nothing stored for an empty file", presets)
+		}
+	})
+
+	t.Run("a missing file field is 400", func(t *testing.T) {
+		repo, cleanup := setupTestDB(t)
+		defer cleanup()
+		router := setupTestRouterWithHandler(NewDashboardHandler(repo))
+
+		req, _ := uploadRequest(t, "notfile", "deepseek v4.md", "IGNORED")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("a JSON body is not a file upload", func(t *testing.T) {
+		repo, cleanup := setupTestDB(t)
+		defer cleanup()
+		router := setupTestRouterWithHandler(NewDashboardHandler(repo))
+
+		req := httptest.NewRequest(http.MethodPost, "/api/jailbreak/presets/upload",
+			strings.NewReader(`{"prompt":"x"}`))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("a file past the prompt ceiling is 413", func(t *testing.T) {
+		repo, cleanup := setupTestDB(t)
+		defer cleanup()
+		router := setupTestRouterWithHandler(NewDashboardHandler(repo))
+
+		big := strings.Repeat("x", maxJailbreakBodyBytes+1)
+		req, _ := uploadRequest(t, "file", "huge.md", big)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusRequestEntityTooLarge {
+			t.Fatalf("status = %d, want 413 (%s)", rec.Code, rec.Body.String())
+		}
+	})
 }

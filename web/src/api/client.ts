@@ -1128,10 +1128,12 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const headers = {
-    ...getAuthHeaders(),
-    ...(options.headers as Record<string, string> || {}),
-  }
+  const headers: Record<string, string> = { ...getAuthHeaders() }
+  // A FormData body must carry its own boundary. Forcing application/json here
+  // makes the server fail to parse the upload, so the header is dropped for
+  // exactly that case.
+  if (options.body instanceof FormData) delete headers['Content-Type']
+  Object.assign(headers, (options.headers as Record<string, string>) || {})
   const res = await fetch(path, { ...options, headers })
   if (res.status === 401) {
     handleUnauthorized(path)
@@ -2321,4 +2323,12 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ target }),
     }),
+  uploadJailbreakPreset: (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return request<{ ok: boolean; preset: JailbreakImportEntry }>(
+      '/api/jailbreak/presets/upload',
+      { method: 'POST', body: form },
+    )
+  },
 }

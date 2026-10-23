@@ -50,6 +50,7 @@
   let importing = $state(false)
   let importStatus = $state('')
   let importResult = $state<JailbreakImportResult | null>(null)
+  let uploading = $state(false)
 
   onMount(load)
 
@@ -118,6 +119,32 @@
       importStatus = 'Import failed: ' + errorMessage(e)
     } finally {
       importing = false
+    }
+  }
+
+  async function uploadPresetFile(event: Event) {
+    const input = event.currentTarget as HTMLInputElement
+    const file = input.files?.[0]
+    if (!file) return
+    uploading = true
+    importStatus = ''
+    importResult = null
+    try {
+      const res = await api.uploadJailbreakPreset(file)
+      importResult = {
+        ok: true,
+        source: res.preset.path,
+        imported: [res.preset],
+        refused: [],
+      }
+      importStatus = `Uploaded ${res.preset.name} as a preset.`
+      await load()
+    } catch (e) {
+      importStatus = 'Upload failed: ' + errorMessage(e)
+    } finally {
+      uploading = false
+      // Reset so picking the same file again fires change.
+      input.value = ''
     }
   }
 
@@ -416,6 +443,24 @@
         </div>
       {/if}
     {/if}
+    <div class="pt-3 border-t border-border-subtle space-y-2">
+      <div class="flex flex-wrap items-center gap-3">
+        <label class="text-xs text-text-subtle">…or upload a prompt file</label>
+        <input
+          type="file"
+          accept=".md,.markdown,.txt"
+          onchange={uploadPresetFile}
+          disabled={uploading}
+          aria-label="Upload a prompt file"
+          class="text-xs text-text-muted file:mr-3 file:px-3 file:py-1.5 file:rounded-[10px] file:border file:border-border file:bg-surface-2 file:text-text-main file:text-xs file:font-medium hover:file:bg-surface-3 disabled:opacity-50"
+        />
+        {#if uploading}<span class="text-xs text-text-muted">Uploading…</span>{/if}
+      </div>
+      <p class="text-[11px] text-text-subtle">
+        The file name becomes the preset name and its keyword chain, the same as a GitHub import.
+        To write a prompt by hand instead, use <span class="text-text-muted">+ New preset</span> below.
+      </p>
+    </div>
   </section>
 
   <!-- Presets -->

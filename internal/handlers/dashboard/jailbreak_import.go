@@ -400,31 +400,47 @@ func jailbreakImportCandidate(p string) bool {
 	return strings.HasSuffix(base, ".md") || strings.HasSuffix(base, ".txt")
 }
 
-// importOne downloads one file and writes it as a preset.
+// importOne downloads one file from GitHub and writes it as a preset.
 func (imp *jailbreakImporter) importOne(ctx context.Context, repo *db.Repo, src githubJailbreakSource, ref string, f githubFile, claimed map[string]bool) (*jailbreakImportEntry, *jailbreakImportRefusal) {
 	text, err := imp.fetchText(ctx, imp.rawURL(src, ref, f.Path), maxJailbreakImportFileBytes)
 	if err != nil {
 		return nil, &jailbreakImportRefusal{Path: f.Path, Reason: err.Error()}
 	}
-	if strings.TrimSpace(text) == "" {
-		return nil, &jailbreakImportRefusal{Path: f.Path, Reason: "file is empty"}
+	entry, err := importJailbreakDocument(repo, f.Path, fmt.Sprintf("%s/%s@%s/%s", src.Owner, src.Repo, ref, f.Path), text, claimed)
+	if err != nil {
+		return nil, &jailbreakImportRefusal{Path: f.Path, Reason: err.Error()}
 	}
-	stem := jailbreakFileStem(f.Path)
+	return entry, nil
+}
+
+// errJailbreakEmptyPrompt marks a file whose content is blank: the operator
+// picked a file with nothing in it, which is their mistake rather than a
+// server fault.
+var errJailbreakEmptyPrompt = errors.New("prompt is empty")
+
+// importJailbreakDocument writes one prompt as a preset. It is the shared tail
+// of every import path, so a file fetched from GitHub and a file uploaded from
+// the dashboard derive the same id, name, source and keyword chain.
+func importJailbreakDocument(repo *db.Repo, filePath, source, text string, claimed map[string]bool) (*jailbreakImportEntry, error) {
+	if strings.TrimSpace(text) == "" {
+		return nil, fmt.Errorf("%w: %s", errJailbreakEmptyPrompt, filePath)
+	}
+	stem := jailbreakFileStem(filePath)
 	doc := &db.JailbreakDoc{
 		ID:       slugify(stem),
 		Name:     stem,
 		Prompt:   text,
-		Source:   fmt.Sprintf("%s/%s@%s/%s", src.Owner, src.Repo, ref, f.Path),
+		Source:   source,
 		Keywords: jailbreakImportKeywords(stem, claimed),
 	}
 	if err := repo.SaveJailbreakPreset(doc); err != nil {
-		return nil, &jailbreakImportRefusal{Path: f.Path, Reason: err.Error()}
+		return nil, err
 	}
 	keywords := make([]string, 0, len(doc.Keywords))
 	for _, kw := range doc.Keywords {
 		keywords = append(keywords, kw.Text)
 	}
-	return &jailbreakImportEntry{ID: doc.ID, Name: doc.Name, Path: f.Path, Keywords: keywords}, nil
+	return &jailbreakImportEntry{ID: doc.ID, Name: doc.Name, Path: filePath, Keywords: keywords}, nil
 }
 
 // jailbreakClaimedStems is the set of full normalized file names in the
@@ -617,4 +633,51 @@ func (h *DashboardHandler) HandleImportJailbreakGithub(w http.ResponseWriter, r 
 		"imported": res.Imported,
 		"refused":  res.Refused,
 	})
+}
+
+// uploadOverheadBytes is the room a multipart envelope needs on top of the
+// prompt itself, so the bound covers the whole request rather than the file.
+const uploadOverheadBytes = 64 * 1024
+
+// HandleUploadJailbreakPreset creates one preset from an uploaded .md or .txt
+// file. POST /api/jailbreak/presets/upload, multipart/form-data, field "file".
+// The file follows the same derivation as a GitHub import: its name becomes
+// the preset name and the keyword chain comes from that name.
+func (h *DashboardHandler) HandleUploadJailbreakPreset(w http.ResponseWriter, r *http.Request) {
+	// Bound the request before parsing it. A multipart body otherwise streams
+	// into memory while the limit is only checked afterwards.
+	r.Body = http.MaxBytesReader(w, r.Body, maxJailbreakBodyBytes+uploadOverheadBytes)
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "missing file field: "+err.Error())
+		return
+	}
+	defer func() { _ = file.Close() }()
+	body, err := io.ReadAll(io.LimitReader(file, maxJailbreakBodyBytes+1))
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(body) > maxJailbreakBodyBytes {
+		handlerutil.WriteJSONError(w, http.StatusRequestEntityTooLarge,
+			fmt.Sprintf("file exceeds %d bytes", maxJailbreakBodyBytes))
+		return
+	}
+	// A client can send any path in the filename; only the base name is used,
+	// so an upload cannot name a preset after a directory.
+	name := path.Base(header.Filename)
+	if name == "" || name == "." || name == ".." {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "file has no usable name")
+		return
+	}
+	entry, err := importJailbreakDocument(h.Repo, name, "upload:"+name, string(body), nil)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, errJailbreakEmptyPrompt) {
+			status = http.StatusBadRequest
+		}
+		handlerutil.WriteJSONError(w, status, err.Error())
+		return
+	}
+	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "preset": entry})
 }
