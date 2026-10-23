@@ -954,6 +954,28 @@ export interface JailbreakExcludes {
   excludes: JailbreakKeyword[]
 }
 
+/** One preset a GitHub import wrote. */
+export interface JailbreakImportEntry {
+  id: string
+  name: string
+  path: string
+  keywords: string[]
+}
+
+/** One file a GitHub import skipped, with the reason. */
+export interface JailbreakImportRefusal {
+  path: string
+  reason: string
+}
+
+/** The result of importing a prompt collection from GitHub. */
+export interface JailbreakImportResult {
+  ok: boolean
+  source: string
+  imported: JailbreakImportEntry[]
+  refused: JailbreakImportRefusal[]
+}
+
 export function isAuthenticated(): boolean {
   if (typeof window === 'undefined') return false
   if (sessionStorage.getItem('9router_auth') === 'true' || localStorage.getItem('9router_auth') === 'true') {
@@ -2293,5 +2315,10 @@ export const api = {
     request<JailbreakExcludes>('/api/jailbreak/excludes', {
       method: 'PUT',
       body: JSON.stringify({ excludes }),
+    }),
+  importJailbreakGithub: (target: string) =>
+    request<JailbreakImportResult>('/api/jailbreak/import-github', {
+      method: 'POST',
+      body: JSON.stringify({ target }),
     }),
 }

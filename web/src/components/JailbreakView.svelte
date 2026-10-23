@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { api, type JailbreakDoc, type JailbreakKeyword, type JailbreakModelConfig } from '../api/client'
+  import { api, type JailbreakDoc, type JailbreakImportResult, type JailbreakKeyword, type JailbreakModelConfig } from '../api/client'
   import { matchesAnyJailbreakKeyword } from '../lib/jailbreakKeywords'
   import KeywordRules from './KeywordRules.svelte'
 
@@ -44,6 +44,12 @@
   let globalExcludes = $state<JailbreakKeyword[]>([])
   let globalSaving = $state(false)
   let globalStatus = $state('')
+
+  // GitHub import: a whole collection of prompts in one request.
+  let importTarget = $state('')
+  let importing = $state(false)
+  let importStatus = $state('')
+  let importResult = $state<JailbreakImportResult | null>(null)
 
   onMount(load)
 
@@ -91,6 +97,27 @@
       docStatus = 'Save failed: ' + errorMessage(e)
     } finally {
       docSaving = false
+    }
+  }
+
+  async function importFromGithub() {
+    const target = importTarget.trim()
+    if (!target) {
+      importStatus = 'Enter a repository first, e.g. togg53192-cmd/jailbreaks'
+      return
+    }
+    importing = true
+    importStatus = ''
+    importResult = null
+    try {
+      const res = await api.importJailbreakGithub(target)
+      importResult = res
+      importStatus = `Imported ${res.imported.length} preset(s) from ${res.source}.`
+      await load()
+    } catch (e) {
+      importStatus = 'Import failed: ' + errorMessage(e)
+    } finally {
+      importing = false
     }
   }
 
@@ -326,6 +353,69 @@
       </button>
       {#if globalStatus}<span class="text-xs text-text-muted">{globalStatus}</span>{/if}
     </div>
+  </section>
+
+  <!-- Import a prompt collection from GitHub -->
+  <section class="p-5 rounded-[14px] bg-surface border border-border space-y-4">
+    <div class="flex items-center justify-between gap-2">
+      <h2 class="text-sm font-bold text-text-main">Import from GitHub</h2>
+      <span class="text-[11px] text-text-subtle">Public repositories only</span>
+    </div>
+    <p class="text-xs text-text-subtle">
+      Point this at a repository that keeps one prompt per file — the shape collections such as
+      <code class="text-text-muted">togg53192-cmd/jailbreaks</code> use. Every file becomes a preset, and
+      its keywords are derived from the file name, so it covers that model on every provider and combo
+      leg without arming each id. README files and dot-directories are skipped.
+    </p>
+    <div class="flex flex-wrap items-center gap-3">
+      <input
+        type="text"
+        bind:value={importTarget}
+        placeholder="owner/repo, owner/repo@branch, or a github.com URL"
+        aria-label="GitHub repository or URL"
+        class="flex-1 min-w-[280px] px-3 py-2 rounded-[10px] bg-surface-2 border border-border text-sm text-text-main placeholder:text-text-subtle"
+      />
+      <button
+        type="button"
+        onclick={importFromGithub}
+        disabled={importing}
+        class="px-4 py-2 rounded-[10px] bg-brand-500 text-white text-sm font-medium disabled:opacity-50 hover:bg-primary-hover"
+      >
+        {importing ? 'Importing…' : 'Import'}
+      </button>
+      {#if importStatus}<span class="text-xs text-text-muted">{importStatus}</span>{/if}
+    </div>
+    {#if importResult}
+      {#if importResult.imported.length > 0}
+        <div class="space-y-1">
+          <h3 class="text-xs font-semibold text-text-main">Imported ({importResult.imported.length})</h3>
+          <ul class="space-y-1">
+            {#each importResult.imported as entry (entry.id)}
+              <li class="text-xs text-text-muted">
+                <span class="text-text-main">{entry.name}</span>
+                <span class="text-text-subtle"> · {entry.path}</span>
+                {#if entry.keywords.length > 0}
+                  <span class="text-text-subtle"> · matches {entry.keywords.join(', ')}</span>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+        </div>
+      {/if}
+      {#if importResult.refused.length > 0}
+        <div class="space-y-1">
+          <h3 class="text-xs font-semibold text-text-main">Skipped ({importResult.refused.length})</h3>
+          <ul class="space-y-1">
+            {#each importResult.refused as refusal (refusal.path)}
+              <li class="text-xs text-text-muted">
+                <span class="text-text-main">{refusal.path}</span>
+                <span class="text-text-subtle"> · {refusal.reason}</span>
+              </li>
+            {/each}
+          </ul>
+        </div>
+      {/if}
+    {/if}
   </section>
 
   <!-- Presets -->

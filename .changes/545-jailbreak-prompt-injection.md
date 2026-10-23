@@ -65,3 +65,39 @@
   the single-model and combo-leg paths while a preset exclude blocks it;
   `bun test src scripts` passes (523 tests) and the svelte-check ratchet holds
   at baseline with 0 unresolved identifiers.
+
+### Import a prompt collection from GitHub
+
+- `POST /api/jailbreak/import-github` accepts `owner/repo`,
+  `owner/repo@branch`, and the `github.com`, `raw.githubusercontent.com` and
+  `api.github.com` URL forms, and writes one preset per prompt file, so a
+  repository such as `togg53192-cmd/jailbreaks` loads in one request instead of
+  one paste per model.
+- Each preset's keywords are derived from its file name as a prefix chain:
+  `deepseek v4.md` yields `deepseek`, `deepseek-v4`. Resolution prefers the
+  longest matching rule, so the file named after a model beats a sibling that
+  only shares the family token, and a name longer than the model id
+  (`kimi-k3-agents.md` for `kimi-k3`) still resolves. The chain is capped at
+  the storage bound so an import never produces a preset the store refuses.
+- Every file is attempted on its own: a dead link or an empty file is reported
+  by path with its reason and the rest still imports. `README*`,
+  dot-directories, non-`.md`/`.txt` files, files past 512 KB, and anything past
+  200 files or 8 MB are skipped and named in the response.
+- Only GitHub hosts are reachable, redirects re-checked against the same
+  allowlist: the target is operator input, and following it anywhere would turn
+  the dashboard into a proxy for the gateway's own network. Responses are
+  size-bounded, and files are fetched through a bounded pool of four so a large
+  collection cannot spawn unbounded work on a one-vCPU box.
+- Re-running an import updates the presets it wrote rather than duplicating
+  them, so refreshing a collection is safe.
+- Dashboard: an "Import from GitHub" card on the Jailbreak view with the
+  accepted input shapes, the imported presets with the keywords each one
+  matches, and the skipped files with their reasons.
+- Verified: `go test ./internal/handlers/dashboard/...` covers the target
+  parser (every accepted shape plus traversal, non-GitHub host and internal-host
+  rejection), the keyword chain, the candidate filter, an end-to-end import
+  against a fake GitHub proving the presets resolve for `providerx/deepseek-v4`
+  and `kimi-k3` while an uncovered model resolves to nothing, the refusal path,
+  and the handler's 400-versus-502 mapping; a live import of
+  `togg53192-cmd/jailbreaks` wrote its presets and injected a request for
+  `deepseek v4` on a provider the collection never names.
