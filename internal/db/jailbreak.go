@@ -19,6 +19,16 @@ type JailbreakDoc struct {
 	// Source is the .md file the prompt was uploaded from, kept for display so
 	// the operator can tell an uploaded agents.md from something typed inline.
 	Source string `json:"source,omitempty"`
+	// Keywords bind this preset to every model id that matches one of them,
+	// across providers and combo legs alike, so one preset covers a model
+	// family without arming each id. See jailbreak_keywords.go for the modes
+	// and the precedence rules.
+	Keywords []JailbreakKeyword `json:"keywords,omitempty"`
+	// Excludes are the same rules read as a deny list: a model id matching one
+	// of them is never injected with this preset, even when a keyword above
+	// matches it. A global exclude list (see GetJailbreakExcludes) overrides
+	// every preset, including exact bindings.
+	Excludes []JailbreakKeyword `json:"excludes,omitempty"`
 }
 
 // JailbreakModelConfig holds the binding between a model and a preset.
@@ -32,6 +42,9 @@ const (
 	jailbreakDocKey      = "default"
 	jailbreakDocPrefix   = "doc:"
 	jailbreakModelPrefix = "model:"
+	// jailbreakExcludeKey holds the global exclude list, which denies every
+	// preset and every exact binding.
+	jailbreakExcludeKey = "exclude"
 )
 
 // GetJailbreakDoc returns the default saved document, or zero values when none was
@@ -113,6 +126,11 @@ func (r *Repo) SaveJailbreakPreset(d *JailbreakDoc) error {
 			d.Name = id
 		}
 	}
+	keywords, err := NormalizeJailbreakKeywords(d.Keywords)
+	if err != nil {
+		return err
+	}
+	d.Keywords = keywords
 	raw, err := json.Marshal(d)
 	if err != nil {
 		return err
@@ -126,6 +144,7 @@ func (r *Repo) SaveJailbreakPreset(d *JailbreakDoc) error {
 		 ON CONFLICT(scope, key) DO UPDATE SET value = excluded.value`,
 		jailbreakScope, key, string(raw),
 	)
+	r.invalidateJailbreakRuleset()
 	return err
 }
 
@@ -179,6 +198,7 @@ func (r *Repo) DeleteJailbreakPreset(id string) error {
 		}
 	}
 
+	r.invalidateJailbreakRuleset()
 	return nil
 }
 
@@ -201,32 +221,48 @@ func (r *Repo) ListJailbreakPresets() ([]*JailbreakDoc, error) {
 		if err := rows.Scan(&k, &raw); err != nil {
 			return nil, err
 		}
-		var d JailbreakDoc
-		if err := json.Unmarshal([]byte(raw), &d); err != nil {
+		d := parseJailbreakPresetRow(k, raw)
+		if d == nil {
 			continue
 		}
-		if k == jailbreakDocKey || k == jailbreakDocPrefix+"default" {
+		if k == jailbreakDocKey || k == jailbreakDocPrefix+jailbreakDocKey {
 			if seenDefault {
 				continue
 			}
 			seenDefault = true
-			d.ID = "default"
-			if d.Name == "" {
-				d.Name = "Default"
-			}
-		} else {
-			d.ID = k[len(jailbreakDocPrefix):]
-			if d.Name == "" {
-				if d.Source != "" {
-					d.Name = d.Source
-				} else {
-					d.Name = d.ID
-				}
-			}
 		}
-		presets = append(presets, &d)
+		presets = append(presets, d)
 	}
 	return presets, rows.Err()
+}
+
+// parseJailbreakPresetRow decodes one kv row into a preset with a normalized
+// id, or nil when the row is not a preset. Both the "default" key and the
+// "doc:default" key name the same preset.
+func parseJailbreakPresetRow(k, raw string) *JailbreakDoc {
+	var d JailbreakDoc
+	if err := json.Unmarshal([]byte(raw), &d); err != nil {
+		return nil
+	}
+	switch {
+	case k == jailbreakDocKey || k == jailbreakDocPrefix+jailbreakDocKey:
+		d.ID = jailbreakDocKey
+		if d.Name == "" {
+			d.Name = "Default"
+		}
+	case strings.HasPrefix(k, jailbreakDocPrefix):
+		d.ID = strings.TrimPrefix(k, jailbreakDocPrefix)
+		if d.Name == "" {
+			if d.Source != "" {
+				d.Name = d.Source
+			} else {
+				d.Name = d.ID
+			}
+		}
+	default:
+		return nil
+	}
+	return &d
 }
 
 // JailbreakModelEnabled reads one model's toggle. The key is the model id as
@@ -273,6 +309,9 @@ func (r *Repo) SetJailbreakModelPreset(modelID string, presetID string, enabled 
 	if !enabled || presetID == "" || presetID == "off" {
 		_, err := r.db.Exec(`DELETE FROM kv WHERE scope = ? AND key = ?`,
 			jailbreakScope, jailbreakModelPrefix+modelID)
+		if err == nil {
+			r.invalidateJailbreakRuleset()
+		}
 		return err
 	}
 	cfg := JailbreakModelConfig{
@@ -288,6 +327,7 @@ func (r *Repo) SetJailbreakModelPreset(modelID string, presetID string, enabled 
 		 ON CONFLICT(scope, key) DO UPDATE SET value = excluded.value`,
 		jailbreakScope, jailbreakModelPrefix+modelID, string(raw),
 	)
+	r.invalidateJailbreakRuleset()
 	return err
 }
 
@@ -361,26 +401,16 @@ func (r *Repo) ListJailbreakModelConfigs() (map[string]JailbreakModelConfig, err
 	for _, k := range orphaned {
 		_, _ = r.db.Exec(`DELETE FROM kv WHERE scope = ? AND key = ?`, jailbreakScope, k)
 	}
+	if len(orphaned) > 0 {
+		r.invalidateJailbreakRuleset()
+	}
 	return out, rows.Err()
 }
 
-// GetJailbreakDocForModel returns the resolved preset document for a model.
-// Returns nil if model is disabled or no document is configured.
+// GetJailbreakDocForModel returns the resolved preset document for a single
+// model id: an exact binding first, then a keyword rule. Requests that also
+// carry forwarded leg ids (combo and fusion) resolve through
+// ResolveJailbreakDoc, which takes every candidate id.
 func (r *Repo) GetJailbreakDocForModel(modelID string) (*JailbreakDoc, error) {
-	cfg, err := r.GetJailbreakModelConfig(modelID)
-	if err != nil || !cfg.Enabled {
-		return nil, err
-	}
-	presetID := cfg.PresetID
-	if presetID == "" {
-		presetID = "default"
-	}
-	doc, err := r.GetJailbreakPreset(presetID)
-	if err != nil {
-		return nil, err
-	}
-	if doc == nil || doc.Prompt == "" {
-		return nil, nil
-	}
-	return doc, nil
+	return r.ResolveJailbreakDoc(modelID)
 }

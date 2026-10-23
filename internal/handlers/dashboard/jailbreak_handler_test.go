@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"9router/proxy/internal/db"
 )
 
 // The toggle must survive a reload. Model ids contain "/" and ":"
@@ -226,5 +228,152 @@ func TestJailbreakPresetCRUDRoutes(t *testing.T) {
 	}
 	if _, stillArmed := modelConfigsAfter["anthropic/claude-3-7-sonnet"]; stillArmed {
 		t.Fatalf("model should be unbound to off after preset deletion, got: %+v", modelConfigsAfter["anthropic/claude-3-7-sonnet"])
+	}
+}
+
+// A preset's keyword and exclude rules travel through the same PUT as its
+// prompt, so the dashboard can arm a whole model family in one save.
+func TestJailbreakPresetStoresKeywordRules(t *testing.T) {
+	repo, cleanup := setupTestDB(t)
+	defer cleanup()
+	r := setupTestRouter(repo)
+
+	payload, _ := json.Marshal(map[string]any{
+		"id":     "deepseek",
+		"name":   "Deepseek",
+		"prompt": "DS RULE",
+		"keywords": []map[string]any{
+			{"text": "DeepSeek"},
+			{"text": "^providerx/", "mode": "regex"},
+		},
+		"excludes": []map[string]any{
+			{"text": "deepseek-4-pro"},
+		},
+	})
+	req := httptest.NewRequest(http.MethodPut, "/api/jailbreak/presets", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT preset status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/jailbreak/presets", nil)
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	var list []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode presets: %v", err)
+	}
+	var preset map[string]any
+	for _, p := range list {
+		if p["id"] == "deepseek" {
+			preset = p
+		}
+	}
+	if preset == nil {
+		t.Fatalf("preset not found: %+v", list)
+	}
+	keywords, _ := preset["keywords"].([]any)
+	if len(keywords) != 2 {
+		t.Fatalf("keywords = %+v, want 2 rules", preset["keywords"])
+	}
+	// A word rule is stored lowercased; a regex is stored verbatim.
+	first, _ := keywords[0].(map[string]any)
+	if first["text"] != "deepseek" {
+		t.Errorf("word keyword = %v, want the lowercased form", first["text"])
+	}
+	second, _ := keywords[1].(map[string]any)
+	if second["text"] != "^providerx/" || second["mode"] != "regex" {
+		t.Errorf("regex keyword = %+v, want it verbatim", second)
+	}
+	excludes, _ := preset["excludes"].([]any)
+	if len(excludes) != 1 {
+		t.Fatalf("excludes = %+v, want 1 rule", preset["excludes"])
+	}
+}
+
+// A rule the gateway would reject must be refused here, with the reason, so
+// the operator never saves a preset that silently stops matching.
+func TestJailbreakPresetRejectsBadKeywordRule(t *testing.T) {
+	repo, cleanup := setupTestDB(t)
+	defer cleanup()
+	r := setupTestRouter(repo)
+
+	payload, _ := json.Marshal(map[string]any{
+		"id":       "broken",
+		"name":     "Broken",
+		"prompt":   "x",
+		"keywords": []map[string]any{{"text": "(unclosed", "mode": "regex"}},
+	})
+	req := httptest.NewRequest(http.MethodPut, "/api/jailbreak/presets", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("PUT status = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "regex") {
+		t.Errorf("error body = %s, want the reason", rec.Body.String())
+	}
+}
+
+// The global exclude list round-trips through its own endpoints and denies
+// every preset, including an exact binding.
+func TestJailbreakGlobalExcludeRoutes(t *testing.T) {
+	repo, cleanup := setupTestDB(t)
+	defer cleanup()
+	r := setupTestRouter(repo)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/jailbreak/excludes", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET excludes status = %d, want 200", rec.Code)
+	}
+	var empty map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &empty); err != nil {
+		t.Fatalf("decode empty excludes: %v", err)
+	}
+	if rules, _ := empty["excludes"].([]any); len(rules) != 0 {
+		t.Fatalf("excludes = %+v, want an empty list", empty["excludes"])
+	}
+
+	payload, _ := json.Marshal(map[string]any{
+		"excludes": []map[string]any{{"text": "providerx/deepseek-4-pro"}},
+	})
+	req = httptest.NewRequest(http.MethodPut, "/api/jailbreak/excludes", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT excludes status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/jailbreak/excludes", nil)
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	var got map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode excludes: %v", err)
+	}
+	rules, _ := got["excludes"].([]any)
+	if len(rules) != 1 {
+		t.Fatalf("excludes = %+v, want 1 rule", got["excludes"])
+	}
+
+	// The deny list outranks an exact binding.
+	if err := repo.SaveJailbreakPreset(&db.JailbreakDoc{ID: "p", Name: "P", Prompt: "P RULE"}); err != nil {
+		t.Fatalf("save preset: %v", err)
+	}
+	if err := repo.SetJailbreakModelPreset("providerx/deepseek-4-pro", "p", true); err != nil {
+		t.Fatalf("bind model: %v", err)
+	}
+	doc, err := repo.ResolveJailbreakDoc("providerx/deepseek-4-pro")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if doc != nil {
+		t.Errorf("globally excluded id resolved to %+v, want no injection", doc)
 	}
 }

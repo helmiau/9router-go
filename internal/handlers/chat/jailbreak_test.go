@@ -428,3 +428,161 @@ func TestSingleModelOpenAIArmedInjectsIntoUpstream(t *testing.T) {
 		t.Errorf("single-model (openai) jailbreak did not reach upstream body: %s", got)
 	}
 }
+
+// TestKeywordArmedPresetInjectsIntoUpstream proves a preset armed by keyword
+// alone — no per-model binding anywhere — injects on the real forward path.
+// The keyword matches the leg ids the request is forwarded to
+// ("deepseek/deepseek-chat" and "deepseek-chat"), which is what lets one
+// preset cover the same model across providers and combos.
+func TestKeywordArmedPresetInjectsIntoUpstream(t *testing.T) {
+	var gotBody atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		gotBody.Store(string(raw))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"id":"x","choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+	}))
+	defer srv.Close()
+
+	database, cleanup := setupChatTestDB(t)
+	defer cleanup()
+	if _, err := database.Exec(`DELETE FROM providerConnections WHERE id IN ('conn-1','conn-2')`); err != nil {
+		t.Fatalf("clear seeded connections: %v", err)
+	}
+	seedConnDB(t, database, "deepseek", "conn-jb5", "sk-jb5", srv.URL)
+
+	repo := db.NewRepo(database)
+	h := NewChatHandler(repo)
+
+	if err := repo.SaveJailbreakPreset(&db.JailbreakDoc{
+		ID:       "kw",
+		Name:     "KW",
+		Prompt:   "KEYWORD INJECTED RULE",
+		Keywords: []db.JailbreakKeyword{{Text: "deepseek"}},
+	}); err != nil {
+		t.Fatalf("save preset: %v", err)
+	}
+
+	body := []byte(`{"model":"deepseek/deepseek-chat","max_tokens":50,"messages":[{"role":"user","content":"hi"}]}`)
+	modelInfo := &ModelInfo{Provider: "deepseek", Model: "deepseek-chat", ConnectionID: "conn-jb5"}
+	h.handleSingleModel(context.Background(), httptest.NewRecorder(), body, modelInfo, false, false)
+
+	got, _ := gotBody.Load().(string)
+	if got == "" {
+		t.Fatal("upstream never called")
+	}
+	if !strings.Contains(got, "KEYWORD INJECTED RULE") {
+		t.Errorf("keyword-armed preset did not reach upstream body: %s", got)
+	}
+}
+
+// TestPresetExcludeBlocksKeywordInjection is the control for the test above:
+// the same keyword match, denied by the preset's own exclude list, must
+// forward the body untouched.
+func TestPresetExcludeBlocksKeywordInjection(t *testing.T) {
+	var gotBody atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		gotBody.Store(string(raw))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"id":"x","choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+	}))
+	defer srv.Close()
+
+	database, cleanup := setupChatTestDB(t)
+	defer cleanup()
+	if _, err := database.Exec(`DELETE FROM providerConnections WHERE id IN ('conn-1','conn-2')`); err != nil {
+		t.Fatalf("clear seeded connections: %v", err)
+	}
+	seedConnDB(t, database, "deepseek", "conn-jb6", "sk-jb6", srv.URL)
+
+	repo := db.NewRepo(database)
+	h := NewChatHandler(repo)
+
+	if err := repo.SaveJailbreakPreset(&db.JailbreakDoc{
+		ID:       "kw",
+		Name:     "KW",
+		Prompt:   "KEYWORD INJECTED RULE",
+		Keywords: []db.JailbreakKeyword{{Text: "deepseek"}},
+		Excludes: []db.JailbreakKeyword{{Text: "deepseek-chat"}},
+	}); err != nil {
+		t.Fatalf("save preset: %v", err)
+	}
+
+	body := []byte(`{"model":"deepseek/deepseek-chat","max_tokens":50,"messages":[{"role":"user","content":"hi"}]}`)
+	modelInfo := &ModelInfo{Provider: "deepseek", Model: "deepseek-chat", ConnectionID: "conn-jb6"}
+	h.handleSingleModel(context.Background(), httptest.NewRecorder(), body, modelInfo, false, false)
+
+	got, _ := gotBody.Load().(string)
+	if got == "" {
+		t.Fatal("upstream never called")
+	}
+	if strings.Contains(got, "KEYWORD INJECTED RULE") {
+		t.Errorf("preset exclude did not block injection: %s", got)
+	}
+	if strings.Contains(got, `"role":"system"`) {
+		t.Errorf("body was modified by an excluded preset: %s", got)
+	}
+}
+
+// TestComboLegKeywordInjectsIntoUpstream proves the combo path resolves a
+// keyword against the leg ids, not only against the combo name: the combo is
+// unbound, yet its deepseek leg is injected because the preset keyword
+// matches it. That is what makes one preset cover a combo whose legs come
+// from different providers.
+func TestComboLegKeywordInjectsIntoUpstream(t *testing.T) {
+	var gotBody atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		gotBody.Store(string(raw))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"id":"x","choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+	}))
+	defer srv.Close()
+
+	database, cleanup := setupChatTestDB(t)
+	defer cleanup()
+	if _, err := database.Exec(`DELETE FROM providerConnections WHERE id IN ('conn-1','conn-2')`); err != nil {
+		t.Fatalf("clear seeded connections: %v", err)
+	}
+	seedConnDB(t, database, "deepseek", "conn-jb7", "sk-jb7", srv.URL)
+
+	repo := db.NewRepo(database)
+	h := NewChatHandler(repo)
+
+	comboModels := []string{"deepseek/deepseek-chat"}
+	modelsJSON, _ := json.Marshal(comboModels)
+	if _, err := database.Exec(`INSERT INTO combos (id, name, kind, models, createdAt, updatedAt) VALUES ('c-jbkw','combo-jbkw','fallback',?,'2026-07-18T00:00:00Z','2026-07-18T00:00:00Z')`, string(modelsJSON)); err != nil {
+		t.Fatalf("seed combo: %v", err)
+	}
+
+	// No binding on the combo name and none on the leg: the keyword is the
+	// only thing arming this request.
+	if err := repo.SaveJailbreakPreset(&db.JailbreakDoc{
+		ID:       "kw",
+		Name:     "KW",
+		Prompt:   "COMBO LEG KEYWORD RULE",
+		Keywords: []db.JailbreakKeyword{{Text: "deepseek"}},
+	}); err != nil {
+		t.Fatalf("save preset: %v", err)
+	}
+
+	translatedReq := map[string]any{
+		"model":      "deepseek-chat",
+		"max_tokens": 50,
+		"messages":   []map[string]any{{"role": "user", "content": "hi"}},
+	}
+	rec := httptest.NewRecorder()
+	h.handleMessagesComboFallback(context.Background(), rec, translatedReq, comboModels, "fallback", false, "combo-jbkw", 0)
+
+	got, _ := gotBody.Load().(string)
+	if got == "" {
+		t.Fatal("upstream never called")
+	}
+	if !strings.Contains(got, "COMBO LEG KEYWORD RULE") {
+		t.Errorf("combo leg keyword did not reach upstream body: %s", got)
+	}
+}

@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { api, type JailbreakDoc, type JailbreakModelConfig } from '../api/client'
+  import { api, type JailbreakDoc, type JailbreakKeyword, type JailbreakModelConfig } from '../api/client'
+  import { matchesAnyJailbreakKeyword } from '../lib/jailbreakKeywords'
+  import KeywordRules from './KeywordRules.svelte'
 
   // Default document: injected for any armed model that has no specific preset.
   let docPrompt = $state('')
@@ -16,7 +18,15 @@
   // Preset editor.
   let presetModalOpen = $state(false)
   let editingId = $state<string | null>(null)
-  let presetForm = $state({ id: '', name: '', prompt: '', geminiSafety: false, source: '' })
+  let presetForm = $state({
+    id: '',
+    name: '',
+    prompt: '',
+    geminiSafety: false,
+    source: '',
+    keywords: [] as JailbreakKeyword[],
+    excludes: [] as JailbreakKeyword[],
+  })
   let presetSaving = $state(false)
   let presetError = $state('')
 
@@ -27,21 +37,33 @@
   let bindError = $state('')
   let confirmDeleteId = $state<string | null>(null)
 
+  // Keyword / exclude rules: on the default document, per preset, and the one
+  // global deny list that overrides everything.
+  let docKeywords = $state<JailbreakKeyword[]>([])
+  let docExcludes = $state<JailbreakKeyword[]>([])
+  let globalExcludes = $state<JailbreakKeyword[]>([])
+  let globalSaving = $state(false)
+  let globalStatus = $state('')
+
   onMount(load)
 
   async function load() {
     loading = true
     try {
-      const [doc, presetList, modelMap] = await Promise.all([
+      const [doc, presetList, modelMap, excludeList] = await Promise.all([
         api.getJailbreak(),
         api.listJailbreakPresets(),
         api.listJailbreakModels(),
+        api.getJailbreakExcludes(),
       ])
       docPrompt = doc?.prompt || ''
       docSafety = !!doc?.geminiSafety
       docSource = doc?.source || ''
+      docKeywords = doc?.keywords || []
+      docExcludes = doc?.excludes || []
       presets = Array.isArray(presetList) ? presetList : []
       models = modelMap || {}
+      globalExcludes = excludeList?.excludes || []
     } catch (e) {
       docStatus = 'Load failed: ' + errorMessage(e)
     } finally {
@@ -57,7 +79,13 @@
     docSaving = true
     docStatus = ''
     try {
-      await api.saveJailbreak({ prompt: docPrompt, geminiSafety: docSafety, source: docSource || undefined })
+      await api.saveJailbreak({
+        prompt: docPrompt,
+        geminiSafety: docSafety,
+        source: docSource || undefined,
+        keywords: docKeywords,
+        excludes: docExcludes,
+      })
       docStatus = 'Default document saved.'
     } catch (e) {
       docStatus = 'Save failed: ' + errorMessage(e)
@@ -68,7 +96,15 @@
 
   function openCreate() {
     editingId = null
-    presetForm = { id: '', name: '', prompt: '', geminiSafety: false, source: '' }
+    presetForm = {
+      id: '',
+      name: '',
+      prompt: '',
+      geminiSafety: false,
+      source: '',
+      keywords: [],
+      excludes: [],
+    }
     presetError = ''
     presetModalOpen = true
   }
@@ -81,6 +117,9 @@
       prompt: preset.prompt || '',
       geminiSafety: !!preset.geminiSafety,
       source: preset.source || '',
+      keywords: preset.keywords || [],
+      excludes: preset.excludes || [],
+
     }
     presetError = ''
     presetModalOpen = true
@@ -100,13 +139,30 @@
         prompt: presetForm.prompt,
         geminiSafety: presetForm.geminiSafety,
         source: presetForm.source.trim() || undefined,
+        keywords: presetForm.keywords,
+        excludes: presetForm.excludes,
       })
+
       presetModalOpen = false
       await load()
     } catch (e) {
       presetError = errorMessage(e)
     } finally {
       presetSaving = false
+    }
+  }
+
+  async function saveGlobalExcludes() {
+    globalSaving = true
+    globalStatus = ''
+    try {
+      const res = await api.saveJailbreakExcludes(globalExcludes)
+      globalExcludes = res?.excludes || globalExcludes
+      globalStatus = 'Global exclude list saved.'
+    } catch (e) {
+      globalStatus = 'Save failed: ' + errorMessage(e)
+    } finally {
+      globalSaving = false
     }
   }
 
@@ -166,6 +222,18 @@
   }
 
   let boundEntries = $derived(Object.entries(models))
+
+  // A typed binding id that a preset keyword already covers needs no binding.
+  let bindHint = $derived.by(() => {
+    const id = bindModelId.trim()
+    if (!id) return ''
+    for (const preset of presets) {
+      if (preset.keywords && matchesAnyJailbreakKeyword(id, preset.keywords)) {
+        return `Keyword in "${preset.name || preset.id}" already covers this id — binding is optional.`
+      }
+    }
+    return ''
+  })
 </script>
 
 <div class="space-y-6">
@@ -207,6 +275,18 @@
       <input type="checkbox" bind:checked={docSafety} class="w-4 h-4 accent-brand-500" />
       <span class="text-sm text-text-main">Relax Gemini safety filters (BLOCK_NONE)</span>
     </label>
+    <KeywordRules
+      label="Keywords (include)"
+      hint="Models matching one of these rules get this document — across every provider and combo leg. word = whole token, partial = substring, regex = RE2 pattern."
+      rules={docKeywords}
+      onchange={(next) => (docKeywords = next)}
+    />
+    <KeywordRules
+      label="Excludes (deny)"
+      hint="Models matching one of these rules never get this document, even when a keyword above matches."
+      rules={docExcludes}
+      onchange={(next) => (docExcludes = next)}
+    />
     <div class="flex items-center gap-3">
       <button
         type="button"
@@ -217,6 +297,34 @@
         {docSaving ? 'Saving…' : 'Save default'}
       </button>
       {#if docStatus}<span class="text-xs text-text-muted">{docStatus}</span>{/if}
+    </div>
+  </section>
+
+  <!-- Global exclude list -->
+  <section class="p-5 rounded-[14px] bg-surface border border-border space-y-4">
+    <div class="flex items-center justify-between gap-2">
+      <h2 class="text-sm font-bold text-text-main">Global exclude list</h2>
+      <span class="text-[11px] text-text-subtle">Overrides every preset and binding</span>
+    </div>
+    <p class="text-xs text-text-subtle">
+      A model id matching one of these rules is never injected, whatever any preset or exact binding
+      says. Use it for the handful of models that must stay untouched.
+    </p>
+    <KeywordRules
+      label="Excluded models"
+      rules={globalExcludes}
+      onchange={(next) => (globalExcludes = next)}
+    />
+    <div class="flex items-center gap-3">
+      <button
+        type="button"
+        onclick={saveGlobalExcludes}
+        disabled={globalSaving}
+        class="px-4 py-2 rounded-[10px] bg-brand-500 text-white text-sm font-medium disabled:opacity-50 hover:bg-primary-hover"
+      >
+        {globalSaving ? 'Saving…' : 'Save exclude list'}
+      </button>
+      {#if globalStatus}<span class="text-xs text-text-muted">{globalStatus}</span>{/if}
     </div>
   </section>
 
@@ -241,7 +349,9 @@
             <div class="min-w-0">
               <div class="text-sm text-text-main truncate">{preset.name || preset.id || 'Untitled'}</div>
               <div class="text-[11px] text-text-subtle truncate">
-                {preset.id}{preset.geminiSafety ? ' · safety' : ''}{preset.source ? ' · ' + preset.source : ''}
+                {preset.id}{preset.geminiSafety ? ' · safety' : ''}{preset.source ? ' · ' + preset.source : ''}{preset.keywords?.length
+                  ? ' · ' + preset.keywords.length + ' keyword' + (preset.keywords.length > 1 ? 's' : '')
+                  : ''}{preset.excludes?.length ? ' · ' + preset.excludes.length + ' excluded' : ''}
               </div>
             </div>
             <div class="flex items-center gap-2 shrink-0">
@@ -264,6 +374,8 @@
     <h2 class="text-sm font-bold text-text-main">Model bindings</h2>
     <p class="text-xs text-text-subtle">
       Bind a model, provider, or combo id to a preset. The id is matched exactly as the client sends it.
+      A keyword on a preset already covers every id it matches, so a binding is only needed to pick a
+      different preset for one specific id.
     </p>
     <div class="flex flex-col sm:flex-row gap-2">
       <input
@@ -290,6 +402,7 @@
       </button>
     </div>
     {#if bindError}<p class="text-xs text-error">{bindError}</p>{/if}
+    {#if bindHint}<p class="text-xs text-text-muted">{bindHint}</p>{/if}
     {#if boundEntries.length === 0}
       <p class="text-xs text-text-subtle">No models armed.</p>
     {:else}
@@ -363,6 +476,18 @@
         <input type="checkbox" bind:checked={presetForm.geminiSafety} class="w-4 h-4 accent-brand-500" />
         <span class="text-sm text-text-main">Relax Gemini safety filters</span>
       </label>
+      <KeywordRules
+        label="Keywords (include)"
+        hint="Every model id matching one of these rules resolves to this preset — across providers and combo legs."
+        rules={presetForm.keywords}
+        onchange={(next) => (presetForm.keywords = next)}
+      />
+      <KeywordRules
+        label="Excludes (deny)"
+        hint="Models matching one of these rules never get this preset, even when a keyword above matches."
+        rules={presetForm.excludes}
+        onchange={(next) => (presetForm.excludes = next)}
+      />
       {#if presetError}<p class="text-xs text-error">{presetError}</p>{/if}
       <div class="flex justify-end gap-2">
         <button type="button" onclick={() => (presetModalOpen = false)} class="px-4 py-2 rounded-[10px] border border-border text-text-main text-sm hover:bg-surface-2">Cancel</button>

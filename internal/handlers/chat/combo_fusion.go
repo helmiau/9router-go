@@ -180,7 +180,7 @@ func (h *ChatHandler) makePanelCall(body []byte, entry, comboName string) func(c
 			return &fusionResult{model: entry, err: err}
 		}
 		upstreamBody["model"] = modelInfo.Model
-		ctx = h.applyJailbreak(ctx, upstreamBody, comboName)
+		ctx = h.applyJailbreak(ctx, upstreamBody, comboName, jailbreakLegIDs(modelInfo.Provider, modelInfo.Model)...)
 		upstreamJSON, err := json.Marshal(upstreamBody)
 		if err != nil {
 			return &fusionResult{model: entry, err: err}

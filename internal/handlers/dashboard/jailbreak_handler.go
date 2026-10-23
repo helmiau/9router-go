@@ -42,6 +42,12 @@ func (h *DashboardHandler) HandlePutJailbreak(w http.ResponseWriter, r *http.Req
 		handlerutil.WriteJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Reject a bad keyword or exclude here so the operator sees 400 with the
+	// reason, not a 500 from the storage layer.
+	if err := validateJailbreakRules(&doc); err != nil {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if err := h.Repo.SaveJailbreakDoc(&doc); err != nil {
 		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -83,6 +89,10 @@ func (h *DashboardHandler) HandlePutJailbreakPreset(w http.ResponseWriter, r *ht
 			doc.Name = doc.ID
 		}
 	}
+	if err := validateJailbreakRules(&doc); err != nil {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if err := h.Repo.SaveJailbreakPreset(&doc); err != nil {
 		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -101,6 +111,60 @@ func (h *DashboardHandler) HandleDeleteJailbreakPreset(w http.ResponseWriter, r 
 		return
 	}
 	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "id": id})
+}
+
+// validateJailbreakRules checks a preset's include and exclude rules before
+// they are stored. Both lists share one grammar and one set of limits.
+func validateJailbreakRules(doc *db.JailbreakDoc) error {
+	keywords, err := db.NormalizeJailbreakKeywords(doc.Keywords)
+	if err != nil {
+		return err
+	}
+	excludes, err := db.NormalizeJailbreakKeywords(doc.Excludes)
+	if err != nil {
+		return err
+	}
+	doc.Keywords, doc.Excludes = keywords, excludes
+	return nil
+}
+
+// HandleGetJailbreakExcludes serves the global deny list, which overrides
+// every preset and every exact binding.
+func (h *DashboardHandler) HandleGetJailbreakExcludes(w http.ResponseWriter, r *http.Request) {
+	excludes, err := h.Repo.GetJailbreakExcludes()
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if excludes == nil {
+		excludes = []db.JailbreakKeyword{}
+	}
+	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{"excludes": excludes})
+}
+
+func (h *DashboardHandler) HandlePutJailbreakExcludes(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxJailbreakBodyBytes+1))
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var req struct {
+		Excludes []db.JailbreakKeyword `json:"excludes"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	excludes, err := db.NormalizeJailbreakKeywords(req.Excludes)
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := h.Repo.SaveJailbreakExcludes(excludes); err != nil {
+		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "excludes": excludes})
 }
 
 func (h *DashboardHandler) HandleListJailbreakModels(w http.ResponseWriter, r *http.Request) {
