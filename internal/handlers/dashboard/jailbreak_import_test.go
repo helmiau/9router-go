@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -24,6 +25,7 @@ func TestParseGithubJailbreakTarget(t *testing.T) {
 		name      string
 		target    string
 		want      githubJailbreakSource
+		wantURL   string
 		wantErr   bool
 		wantBadTg bool
 	}{
@@ -91,16 +93,16 @@ func TestParseGithubJailbreakTarget(t *testing.T) {
 			wantBadTg: true,
 		},
 		{
-			name:      "non github host",
-			target:    "https://evil.example.com/owner/repo",
-			wantErr:   true,
-			wantBadTg: true,
+			// Not GitHub, but a well-formed http(s) URL is a valid import
+			// target now. The address guard runs at dial time, not here.
+			name:    "non github host is a url target",
+			target:  "https://evil.example.com/owner/repo",
+			wantURL: "https://evil.example.com/owner/repo",
 		},
 		{
-			name:      "internal host",
-			target:    "http://127.0.0.1:8080/owner/repo",
-			wantErr:   true,
-			wantBadTg: true,
+			name:    "internal host is a url target",
+			target:  "http://127.0.0.1:8080/owner/repo",
+			wantURL: "http://127.0.0.1:8080/owner/repo",
 		},
 		{
 			name:      "path traversal in raw path",
@@ -130,10 +132,10 @@ func TestParseGithubJailbreakTarget(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseGithubJailbreakTarget(tt.target)
+			got, err := parseJailbreakImportTarget(tt.target)
 			if tt.wantErr {
 				if err == nil {
-					t.Fatalf("parseGithubJailbreakTarget(%q) = %+v, want error", tt.target, got)
+					t.Fatalf("parseJailbreakImportTarget(%q) = %+v, want error", tt.target, got)
 				}
 				if tt.wantBadTg && !isBadTarget(err) {
 					t.Fatalf("error %v is not marked as a bad target; the handler would answer 502 for an operator typo", err)
@@ -141,10 +143,16 @@ func TestParseGithubJailbreakTarget(t *testing.T) {
 				return
 			}
 			if err != nil {
-				t.Fatalf("parseGithubJailbreakTarget(%q): %v", tt.target, err)
+				t.Fatalf("parseJailbreakImportTarget(%q): %v", tt.target, err)
 			}
-			if got != tt.want {
-				t.Fatalf("parseGithubJailbreakTarget(%q) = %+v, want %+v", tt.target, got, tt.want)
+			if tt.wantURL != "" {
+				if got.URL != tt.wantURL || got.Github != nil {
+					t.Fatalf("parseJailbreakImportTarget(%q) = %+v, want URL %q", tt.target, got, tt.wantURL)
+				}
+				return
+			}
+			if got.Github == nil || *got.Github != tt.want {
+				t.Fatalf("parseJailbreakImportTarget(%q) = %+v, want github %+v", tt.target, got, tt.want)
 			}
 		})
 	}
@@ -297,6 +305,9 @@ func (fg *fakeGithub) importer() *jailbreakImporter {
 	imp := newJailbreakImporter()
 	imp.apiBase = fg.api.URL
 	imp.rawBase = fg.raw.URL
+	// The fake is on loopback, which the production guard refuses. An operator
+	// importing from their own network sets the same opt-in.
+	imp.allowPrivate = true
 	return imp
 }
 
@@ -446,7 +457,7 @@ func TestJailbreakImportNoCandidates(t *testing.T) {
 
 // The HTTP shell: a typo is the operator's to fix (400), and a working import
 // answers with what it wrote.
-func TestHandleImportJailbreakGithub(t *testing.T) {
+func TestHandleImportJailbreak(t *testing.T) {
 	fg := newFakeGithub(t, map[string]string{"deepseek v4.md": "HANDLER RULE"})
 	repo, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -456,7 +467,7 @@ func TestHandleImportJailbreakGithub(t *testing.T) {
 	r := setupTestRouterWithHandler(h)
 
 	t.Run("missing target", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/api/jailbreak/import-github", bytes.NewReader([]byte(`{}`)))
+		req := httptest.NewRequest(http.MethodPost, "/api/jailbreak/import", bytes.NewReader([]byte(`{}`)))
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, req)
 		if rec.Code != http.StatusBadRequest {
@@ -464,19 +475,29 @@ func TestHandleImportJailbreakGithub(t *testing.T) {
 		}
 	})
 
-	t.Run("non github target is 400 not 502", func(t *testing.T) {
-		payload, _ := json.Marshal(map[string]any{"target": "https://evil.example.com/o/r"})
-		req := httptest.NewRequest(http.MethodPost, "/api/jailbreak/import-github", bytes.NewReader(payload))
+	t.Run("a non http scheme is 400, not a fetch attempt", func(t *testing.T) {
+		payload, _ := json.Marshal(map[string]any{"target": "ftp://example.com/o/r"})
+		req := httptest.NewRequest(http.MethodPost, "/api/jailbreak/import", bytes.NewReader(payload))
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, req)
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("an unreachable url is 502, the network's fault", func(t *testing.T) {
+		payload, _ := json.Marshal(map[string]any{"target": "https://nonexistent.invalid/o/r"})
+		req := httptest.NewRequest(http.MethodPost, "/api/jailbreak/import", bytes.NewReader(payload))
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadGateway {
+			t.Fatalf("status = %d, want 502 (%s)", rec.Code, rec.Body.String())
 		}
 	})
 
 	t.Run("import writes presets", func(t *testing.T) {
 		payload, _ := json.Marshal(map[string]any{"target": "owner/repo"})
-		req := httptest.NewRequest(http.MethodPost, "/api/jailbreak/import-github", bytes.NewReader(payload))
+		req := httptest.NewRequest(http.MethodPost, "/api/jailbreak/import", bytes.NewReader(payload))
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
@@ -665,4 +686,285 @@ func TestHandleUploadJailbreakPreset(t *testing.T) {
 			t.Fatalf("status = %d, want 413 (%s)", rec.Code, rec.Body.String())
 		}
 	})
+}
+
+// The import target is no longer GitHub-only: a bare owner/repo and a GitHub
+// URL still walk a repository, while any other http(s) URL is one prompt file.
+func TestParseJailbreakImportTarget(t *testing.T) {
+	tests := []struct {
+		name    string
+		target  string
+		wantURL string
+		wantGH  *githubJailbreakSource
+		wantErr bool
+	}{
+		{
+			name:   "shorthand is still a repository",
+			target: "togg53192-cmd/jailbreaks",
+			wantGH: &githubJailbreakSource{Owner: "togg53192-cmd", Repo: "jailbreaks"},
+		},
+		{
+			name:   "github blob is a github file",
+			target: "https://github.com/o/r/blob/main/SOUL.md",
+			wantGH: &githubJailbreakSource{Owner: "o", Repo: "r", Ref: "main", Path: "SOUL.md"},
+		},
+		{
+			name:    "any other https url is one file",
+			target:  "https://paste.example.com/prompts/SOUL.md",
+			wantURL: "https://paste.example.com/prompts/SOUL.md",
+		},
+		{
+			name:    "plain http url is one file",
+			target:  "http://files.example.com/PERSONA.md",
+			wantURL: "http://files.example.com/PERSONA.md",
+		},
+		{
+			name:    "url with a query still names its file",
+			target:  "https://example.com/a/LOAD.md?raw=1",
+			wantURL: "https://example.com/a/LOAD.md?raw=1",
+		},
+		{
+			name:    "ftp scheme is refused",
+			target:  "ftp://example.com/SOUL.md",
+			wantErr: true,
+		},
+		{
+			name:    "file scheme is refused",
+			target:  "file:///etc/passwd",
+			wantErr: true,
+		},
+		{
+			name:    "scheme relative url is refused",
+			target:  "//example.com/SOUL.md",
+			wantErr: true,
+		},
+		{
+			name:    "url with no host is refused",
+			target:  "https:///SOUL.md",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseJailbreakImportTarget(tt.target)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("parseJailbreakImportTarget(%q) = %+v, want error", tt.target, got)
+				}
+				if !errors.Is(err, errJailbreakBadTarget) {
+					t.Fatalf("error %v is not marked as a bad target", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseJailbreakImportTarget(%q): %v", tt.target, err)
+			}
+			if tt.wantURL != "" {
+				if got.URL != tt.wantURL || got.Github != nil {
+					t.Fatalf("got %+v, want URL %q", got, tt.wantURL)
+				}
+				return
+			}
+			if got.Github == nil || *got.Github != *tt.wantGH {
+				t.Fatalf("got %+v, want github %+v", got, *tt.wantGH)
+			}
+		})
+	}
+}
+
+// The kind label is what tells an instruction file apart from a prompt about a
+// model, and it comes from the name the file already has.
+func TestJailbreakImportKind(t *testing.T) {
+	tests := []struct {
+		stem string
+		want string
+	}{
+		{"SOUL", "SOUL"},
+		{"soul", "SOUL"},
+		{"PERSONA", "PERSONA"},
+		{"LOAD", "LOAD"},
+		{"AGENTS", "AGENTS"},
+		{"CLAUDE", "CLAUDE"},
+		{"MODELFILE", "MODELFILE"},
+		{"deepseek v4", ""},
+		{"glm-5.2", ""},
+		{"README", ""},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.stem, func(t *testing.T) {
+			if got := jailbreakImportKind(tt.stem); got != tt.want {
+				t.Fatalf("jailbreakImportKind(%q) = %q, want %q", tt.stem, got, tt.want)
+			}
+		})
+	}
+}
+
+// A URL that resolves into the gateway's own network must be refused: the
+// target is operator input, and a fetcher that reaches the LAN turns the
+// dashboard into a proxy for it.
+func TestJailbreakImportPublicIP(t *testing.T) {
+	tests := []struct {
+		ip   string
+		want bool
+	}{
+		{"8.8.8.8", true},
+		{"1.1.1.1", true},
+		{"2606:4700:4700::1111", true},
+		{"127.0.0.1", false},
+		{"127.8.9.9", false},
+		{"10.0.0.5", false},
+		{"172.16.4.4", false},
+		{"172.31.255.255", false},
+		{"192.168.1.1", false},
+		{"169.254.169.254", false}, // cloud metadata
+		{"100.64.0.1", false},      // CGNAT
+		{"0.0.0.0", false},
+		{"255.255.255.255", false},
+		{"224.0.0.1", false},
+		{"::1", false},
+		{"fe80::1", false},
+		{"fc00::1", false},
+		{"::", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.ip, func(t *testing.T) {
+			if got := jailbreakImportPublicIP(net.ParseIP(tt.ip)); got != tt.want {
+				t.Fatalf("jailbreakImportPublicIP(%s) = %v, want %v", tt.ip, got, tt.want)
+			}
+		})
+	}
+}
+
+// The guard has to bite at dial time, not only in a unit test of the
+// predicate: a hostname that resolves to a loopback address is refused by the
+// client itself, and the opt-in lifts it.
+func TestJailbreakImportDialGuard(t *testing.T) {
+	imp := newJailbreakImporter()
+	imp.allowPrivate = false
+	if err := imp.dialControl("tcp", "127.0.0.1:443", nil); err == nil {
+		t.Fatal("dialControl accepted a loopback address")
+	}
+	if err := imp.dialControl("tcp", "8.8.8.8:443", nil); err != nil {
+		t.Fatalf("dialControl refused a public address: %v", err)
+	}
+	imp.allowPrivate = true
+	if err := imp.dialControl("tcp", "127.0.0.1:443", nil); err != nil {
+		t.Fatalf("dialControl refused loopback with the opt-in set: %v", err)
+	}
+}
+
+// An arbitrary URL is fetched through the same guarded client and becomes a
+// preset named after the file at the end of it.
+func TestJailbreakImportFromArbitraryURL(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/prompts/SOUL.md" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/markdown")
+		fmt.Fprint(w, "SOUL RULE FROM A URL")
+	}))
+	t.Cleanup(srv.Close)
+
+	repo, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	imp := newJailbreakImporter()
+	// The test server is on loopback, which the guard refuses by default; the
+	// opt-in is what an operator importing from their own network sets.
+	imp.allowPrivate = true
+	res, err := imp.importPresets(t.Context(), repo, srv.URL+"/prompts/SOUL.md")
+	if err != nil {
+		t.Fatalf("importPresets: %v", err)
+	}
+	if len(res.Imported) != 1 {
+		t.Fatalf("imported = %+v, want one preset", res.Imported)
+	}
+	entry := res.Imported[0]
+	if entry.ID != "soul" || entry.Name != "SOUL" || entry.Kind != "SOUL" {
+		t.Fatalf("entry = %+v, want id soul, name SOUL, kind SOUL", entry)
+	}
+	doc, err := repo.GetJailbreakPreset("soul")
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if doc == nil || doc.Prompt != "SOUL RULE FROM A URL" {
+		t.Fatalf("stored preset = %+v, want the fetched prompt", doc)
+	}
+	if doc.Source != "url:"+srv.URL+"/prompts/SOUL.md" {
+		t.Fatalf("source = %q, want the url marker", doc.Source)
+	}
+}
+
+// Without the opt-in the same loopback server is unreachable, which is the
+// default an operator gets.
+func TestJailbreakImportURLRefusesPrivateByDefault(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, "SHOULD NOT BE FETCHED")
+	}))
+	t.Cleanup(srv.Close)
+
+	repo, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	imp := newJailbreakImporter()
+	imp.allowPrivate = false
+	if _, err := imp.importPresets(t.Context(), repo, srv.URL+"/SOUL.md"); err == nil {
+		t.Fatal("importPresets reached a loopback address without the opt-in")
+	}
+	presets, err := repo.ListJailbreakPresets()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(presets) != 0 {
+		t.Fatalf("presets = %+v, want nothing stored", presets)
+	}
+}
+
+// A page served as HTML is reduced to its text, so pasting a documentation URL
+// does not store the markup as the prompt.
+func TestJailbreakImportTextStripsHTML(t *testing.T) {
+	body := []byte(`<html><head><title>t</title><style>p{color:red}</style>` +
+		`<script>alert(1)</script></head><body><h1>Title</h1><p>First &amp; foremost</p>` +
+		`<ul><li>one</li><li>two</li></ul><div>Tail</div></body></html>`)
+	got := jailbreakImportText(body, "text/html; charset=utf-8")
+	for _, want := range []string{"Title", "First & foremost", "one", "two", "Tail"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("text %q is missing %q", got, want)
+		}
+	}
+	for _, unwanted := range []string{"<", "alert(1)", "color:red"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("text %q still carries %q", got, unwanted)
+		}
+	}
+
+	// A plain body is kept verbatim.
+	plain := jailbreakImportText([]byte("RAW PROMPT\n"), "text/plain")
+	if plain != "RAW PROMPT\n" {
+		t.Fatalf("plain text = %q, want it verbatim", plain)
+	}
+}
+
+// A URL with no file name still names its preset, from the host.
+func TestJailbreakURLName(t *testing.T) {
+	tests := []struct {
+		raw  string
+		want string
+	}{
+		{"https://example.com/a/SOUL.md", "SOUL.md"},
+		{"https://example.com/a/b/PERSONA.md?x=1", "PERSONA.md"},
+		{"https://paste.example.com/abc123", "abc123"},
+		{"https://paste.example.com/", "paste.example.com"},
+		{"https://paste.example.com", "paste.example.com"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.raw, func(t *testing.T) {
+			if got := jailbreakURLName(tt.raw); got != tt.want {
+				t.Fatalf("jailbreakURLName(%q) = %q, want %q", tt.raw, got, tt.want)
+			}
+		})
+	}
 }

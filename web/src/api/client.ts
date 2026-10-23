@@ -926,6 +926,8 @@ export interface JailbreakDoc {
   prompt: string
   geminiSafety: boolean
   source?: string
+  /** Instruction-file convention: AGENTS, SOUL, PERSONA, LOAD, … */
+  kind?: string
   id?: string
   name?: string
   /** Models matching one of these rules resolve to this preset. */
@@ -959,6 +961,8 @@ export interface JailbreakImportEntry {
   id: string
   name: string
   path: string
+  /** Instruction-file convention: AGENTS, SOUL, PERSONA, LOAD, … */
+  kind?: string
   keywords: string[]
 }
 
@@ -2294,6 +2298,7 @@ export const api = {
     prompt: string
     geminiSafety: boolean
     source?: string
+    kind?: string
     keywords?: JailbreakKeyword[]
     excludes?: JailbreakKeyword[]
   }) =>
@@ -2318,8 +2323,8 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ excludes }),
     }),
-  importJailbreakGithub: (target: string) =>
-    request<JailbreakImportResult>('/api/jailbreak/import-github', {
+  importJailbreak: (target: string) =>
+    request<JailbreakImportResult>('/api/jailbreak/import', {
       method: 'POST',
       body: JSON.stringify({ target }),
     }),

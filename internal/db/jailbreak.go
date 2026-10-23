@@ -19,6 +19,11 @@ type JailbreakDoc struct {
 	// Source is the .md file the prompt was uploaded from, kept for display so
 	// the operator can tell an uploaded agents.md from something typed inline.
 	Source string `json:"source,omitempty"`
+	// Kind labels the instruction-file convention a preset came from:
+	// AGENTS, SOUL, PERSONA, LOAD and the rest are files a tool reads by
+	// name rather than prompts about a model, so the label is what tells
+	// them apart in the library. Empty means unlabelled.
+	Kind string `json:"kind,omitempty"`
 	// Keywords bind this preset to every model id that matches one of them,
 	// across providers and combo legs alike, so one preset covers a model
 	// family without arming each id. See jailbreak_keywords.go for the modes

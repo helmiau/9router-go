@@ -132,3 +132,41 @@
   paths exercised against the running gateway — a raw.githubusercontent.com
   file URL, a `curl -F` upload, and a hand-written `PUT /api/jailbreak/presets`
   — each writing a preset that injects on its model.
+
+### Import from anywhere, and a kind on every preset
+
+- The import field is no longer GitHub-only. `POST /api/jailbreak/import`
+  (renamed from `import-github`) accepts a GitHub repository, a single file on
+  GitHub, or any other http(s) URL, which is read as one prompt file named
+  after its last path segment — so `https://paste.example.com/prompts/SOUL.md`
+  produces the same preset as dropping a file called `SOUL.md`. A URL with no
+  usable segment names its preset after the host, and a page served as HTML is
+  reduced to its readable text rather than stored as markup.
+- The **Import prompts** card is a drop zone: dropping a file uploads it,
+  dropping a URL fills the field and imports it, and the file input still
+  works. The card names all three ways to fill a preset — write by hand, drop
+  a file, point at a URL.
+- A non-GitHub URL is checked against the gateway's own network at connect
+  time, through the dialer's Control hook, so the address that is dialled is
+  the address that was checked: loopback, the private ranges, link-local
+  (cloud metadata), CGNAT, multicast and the reserved blocks are refused, and
+  every redirect is re-checked. `JAILBREAK_IMPORT_ALLOW_PRIVATE=1` lifts it for
+  an operator importing from their own network; it is off by default.
+- Presets now carry a **kind**: the instruction-file convention a prompt came
+  from. `SOUL.md`, `PERSONA.md`, `LOAD.md`, `AGENTS.md`, `CLAUDE.md` and the
+  other recognised names label the preset automatically, shown as a badge in
+  the preset list and in the import result, editable in the preset editor with
+  a datalist of the recognised kinds. A prompt named after a model carries no
+  kind. The label changes nothing about matching — keywords and bindings decide
+  that — it is there to tell an instruction file from a model prompt in a long
+  list.
+- `request()` in the API client keeps the FormData fix, and the import method
+  is renamed to match the endpoint.
+- Verified: `go test ./internal/handlers/dashboard/...` covers the target
+  parser for every accepted shape plus scheme and host rejection, the public-IP
+  predicate across the private, loopback, link-local, CGNAT, multicast and
+  unique-local ranges, the dial guard refusing loopback and honouring the
+  opt-in, an end-to-end import from an arbitrary URL writing a SOUL preset, the
+  same server being unreachable without the opt-in, HTML reduction, and the
+  handler's 400-versus-502 mapping; `bun run build`, `bun test src scripts`
+  (523 tests) and the svelte-check ratchet at baseline.

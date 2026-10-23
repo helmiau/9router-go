@@ -124,16 +124,31 @@ A prompt can reach a preset three ways, and all three end in the same place:
 | How | Where | What it does |
 | --- | --- | --- |
 | Write it by hand | **Jailbreak → + New preset**, the prompt textarea | you type or paste; nothing is derived for you |
-| Upload a file | **Jailbreak → Import from GitHub → …or upload a prompt file** | the file name becomes the preset name and its keyword chain |
-| Point at a URL | the same card's input | a repository, a directory, or one file |
+| Drop or pick a file | the **Import prompts** card, drag onto it or use its file input | the file name becomes the preset name, kind and keyword chain |
+| Type or drop a source | the same card's input | a repository, or one file at any http(s) URL |
 
-The rest of this section covers the URL and upload paths.
+### What every import derives
 
-### From a URL
+From the file name, and only from the file name:
+
+- **Name and id** — `deepseek v4.md` becomes preset `deepseek-v4`.
+- **Keywords** — a prefix chain, so `deepseek v4.md` yields `deepseek`,
+  `deepseek-v4`. Resolution prefers the longest matching rule, so the file named
+  after a model wins over a sibling that only shares the family token, while
+  `providerx/deepseek-v4` resolves exactly as `deepseek-v4` does. A name longer
+  than the model id (`kimi-k3-agents.md` for `kimi-k3`) still resolves, because
+  the chain reaches the shorter id.
+- **Kind** — see below.
+
+Writing by hand is the path to reach for when the prompt is yours rather than a
+file's: nothing is derived, so the preset matches nothing until you add a
+keyword or bind an id.
+
+### From a repository or a URL
 
 A repository that keeps one prompt per file — the shape
 [togg53192-cmd/jailbreaks](https://github.com/togg53192-cmd/jailbreaks) uses —
-can be pulled in whole. Enter any of:
+is pulled in whole. Enter any of:
 
 | Input | Meaning |
 | --- | --- |
@@ -143,44 +158,67 @@ can be pulled in whole. Enter any of:
 | `…/tree/ref/path` | one directory of it |
 | `…/blob/ref/file.md` | one file |
 | `https://raw.githubusercontent.com/owner/repo/ref/file.md` | one file |
+| any other `http(s)` URL | one prompt file, read as-is |
 
-Each `.md` or `.txt` file becomes a preset named after the file, and its
-keywords are derived from that name: `deepseek v4.md` yields the chain
-`deepseek`, `deepseek-v4`. Resolution prefers the longest matching rule, so the
-file named after a model wins over a sibling that only shares the family token,
-while `providerx/deepseek-v4` resolves exactly as `deepseek-v4` does. A file
-whose name is longer than the model id (`kimi-k3-agents.md` for `kimi-k3`) still
-resolves, because the chain reaches the shorter id.
+A non-GitHub URL is read as a single prompt file, named after its last path
+segment: `https://paste.example.com/prompts/SOUL.md` produces the same preset as
+dropping a file called `SOUL.md`. A URL with no usable segment names its preset
+after the host. A page served as HTML is reduced to its readable text, so a
+documentation link does not store the markup as the prompt.
 
 Skipped, and reported by name in the result: `README*`, anything under a
 dot-directory such as `.github`, non-`.md`/`.txt` files, files past 512 KB, and
 anything past 200 files or 8 MB in one import. A file that fails to download
 does not stop the rest — the import reports it and continues.
 
-Only GitHub hosts are reachable, redirects included: the target is operator
-input, and following it anywhere would turn the dashboard into a proxy for the
-gateway's own network.
-
 Re-running an import updates the presets it wrote rather than duplicating
 them, so refreshing a collection is safe. Imported presets are live the moment
 they land: a request for a model they cover is injected. Delete a preset, or
 add the id to the global exclude list, to stop that.
 
-### From an uploaded file
+### Where an import is allowed to reach
 
-The file input in the same card takes one `.md`, `.markdown` or `.txt` file at a
-time and writes it as a preset. It follows exactly the same derivation as the
-URL path, so `deepseek v4.md` becomes preset `deepseek-v4` with keywords
-`deepseek`, `deepseek-v4`, whatever folder it came from. Only the base name of
-the file is used, so a client cannot name a preset after a directory, and an
-empty file is refused rather than stored as a blank prompt.
+The target is operator input, so the fetcher is bounded. A GitHub repository
+import walks a tree and follows whatever the API says, so GitHub hosts are an
+allowlist. Any other URL is checked against the gateway's own network **at
+connect time**, after the name is resolved: loopback, the private ranges,
+link-local (which is where cloud metadata lives), carrier-grade NAT, multicast
+and the reserved blocks are refused, and every redirect is re-checked. A
+hostname that resolves to a private address is refused before the connection
+exists.
 
-The ceiling is the same 512 KB as a typed prompt, and the response names the
-preset it wrote together with the keywords it derived.
+To import from a URL on the gateway's own network — an internal paste service,
+a LAN host — set `JAILBREAK_IMPORT_ALLOW_PRIVATE=1` before starting the
+gateway. It is off by default, because a fetcher that reaches the LAN turns the
+dashboard into a proxy for it.
 
-Writing by hand is the path to reach for when the prompt is yours rather than a
-file's: nothing is derived, so the preset matches nothing until you add a
-keyword or bind an id.
+### From a dropped or picked file
+
+Dropping a file anywhere on the **Import prompts** card, or using its file
+input, uploads one `.md`, `.markdown` or `.txt` file and writes it as a preset.
+It follows exactly the same derivation as the URL path, so `deepseek v4.md`
+becomes preset `deepseek-v4` with keywords `deepseek`, `deepseek-v4`, whatever
+folder it came from. Only the base name of the file is used, so a client cannot
+name a preset after a directory, and an empty file is refused rather than
+stored as a blank prompt.
+
+The ceiling is the same 512 KB as a typed prompt, and the result names the
+preset it wrote together with the kind and keywords it derived.
+
+### Preset kinds
+
+Some files are not prompts about a model: they are files a tool reads by name.
+`AGENTS.md`, `CLAUDE.md`, `SOUL.md`, `PERSONA.md`, `LOAD.md` and the rest are
+recognised, and the preset is labelled with that kind so the library can tell
+them apart at a glance. A prompt named after a model (`deepseek v4.md`) carries
+no kind, because its name already says what it is for.
+
+The recognised kinds are `AGENTS`, `CLAUDE`, `GEMINI`, `CURSORRULES`,
+`WINDSURF`, `COPILOT`, `SOUL`, `PERSONA`, `IDENTITY`, `CHARACTER`, `LOAD`,
+`SYSTEM`, `RULES`, `POLICY`, `MODELFILE` and `CONFIG`. The label is a plain
+field: edit it in the preset editor, or set it by hand on a preset you typed
+yourself. It changes nothing about matching — keywords and bindings decide
+that — it is there so you can find the right file in a long list.
 
 ## 5. Limits
 
@@ -206,7 +244,7 @@ typo never becomes a preset that silently stops matching.
 | `PUT` | `/api/jailbreak/models` | bind or unbind one id |
 | `GET` | `/api/jailbreak/excludes` | the global exclude list |
 | `PUT` | `/api/jailbreak/excludes` | replace the global exclude list |
-| `POST` | `/api/jailbreak/import-github` | import a repository of prompts as presets (`{"target":"owner/repo"}`) |
+| `POST` | `/api/jailbreak/import` | import a repository, a URL, or one file as presets (`{"target":"owner/repo"}`) |
 | `POST` | `/api/jailbreak/presets/upload` | create one preset from an uploaded file (`multipart/form-data`, field `file`) |
 
 The model id travels in the request body rather than the path, because ids

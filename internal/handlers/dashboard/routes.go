@@ -162,7 +162,7 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		r.Put("/jailbreak/models", h.HandleSetJailbreakModel)
 		r.Get("/jailbreak/excludes", h.HandleGetJailbreakExcludes)
 		r.Put("/jailbreak/excludes", h.HandlePutJailbreakExcludes)
-		r.Post("/jailbreak/import-github", h.HandleImportJailbreakGithub)
+		r.Post("/jailbreak/import", h.HandleImportJailbreak)
 		r.Post("/jailbreak/presets/upload", h.HandleUploadJailbreakPreset)
 
 		// Models
