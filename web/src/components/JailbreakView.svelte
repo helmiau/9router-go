@@ -22,6 +22,7 @@
     id: '',
     name: '',
     prompt: '',
+    kind: '',
     geminiSafety: false,
     source: '',
     keywords: [] as JailbreakKeyword[],
@@ -51,6 +52,7 @@
   let importStatus = $state('')
   let importResult = $state<JailbreakImportResult | null>(null)
   let uploading = $state(false)
+  let dragging = $state(false)
 
   onMount(load)
 
@@ -111,7 +113,7 @@
     importStatus = ''
     importResult = null
     try {
-      const res = await api.importJailbreakGithub(target)
+      const res = await api.importJailbreak(target)
       importResult = res
       importStatus = `Imported ${res.imported.length} preset(s) from ${res.source}.`
       await load()
@@ -148,12 +150,32 @@
     }
   }
 
+  // The import field accepts a dropped file, a dropped URL, or a typed one.
+  // A file goes to the upload endpoint; anything else is a target for the
+  // import endpoint, which knows a GitHub repository from a single URL.
+  function onDrop(event: DragEvent) {
+    event.preventDefault()
+    dragging = false
+    const file = event.dataTransfer?.files?.[0]
+    if (file) {
+      void uploadPresetFile({ currentTarget: { files: [file], value: '' } } as unknown as Event)
+      return
+    }
+    const text = event.dataTransfer?.getData('text/uri-list') || event.dataTransfer?.getData('text/plain') || ''
+    const url = text.split('\n')[0].trim()
+    if (url) {
+      importTarget = url
+      void importFromGithub()
+    }
+  }
+
   function openCreate() {
     editingId = null
     presetForm = {
       id: '',
       name: '',
       prompt: '',
+      kind: '',
       geminiSafety: false,
       source: '',
       keywords: [],
@@ -169,6 +191,7 @@
       id: preset.id || '',
       name: preset.name || '',
       prompt: preset.prompt || '',
+      kind: preset.kind || '',
       geminiSafety: !!preset.geminiSafety,
       source: preset.source || '',
       keywords: preset.keywords || [],
@@ -192,6 +215,7 @@
         name: presetForm.name.trim(),
         prompt: presetForm.prompt,
         geminiSafety: presetForm.geminiSafety,
+        kind: presetForm.kind.trim() || undefined,
         source: presetForm.source.trim() || undefined,
         keywords: presetForm.keywords,
         excludes: presetForm.excludes,
@@ -382,24 +406,42 @@
     </div>
   </section>
 
-  <!-- Import a prompt collection from GitHub -->
-  <section class="p-5 rounded-[14px] bg-surface border border-border space-y-4">
+  <!-- Import prompts: a repository, a URL, or a file you drop here -->
+  <section
+    class="p-5 rounded-[14px] bg-surface border border-border space-y-4 transition-colors {dragging
+      ? 'border-brand-500 bg-surface-2'
+      : ''}"
+    ondragover={(e) => {
+      e.preventDefault()
+      dragging = true
+    }}
+    ondragleave={(e) => {
+      if (e.currentTarget === e.target) dragging = false
+    }}
+    ondrop={onDrop}
+    role="group"
+    aria-label="Import prompts"
+  >
     <div class="flex items-center justify-between gap-2">
-      <h2 class="text-sm font-bold text-text-main">Import from GitHub</h2>
-      <span class="text-[11px] text-text-subtle">Public repositories only</span>
+      <h2 class="text-sm font-bold text-text-main">Import prompts</h2>
+      <span class="text-[11px] text-text-subtle">
+        {dragging ? 'Drop to import' : 'Repository, URL, or file'}
+      </span>
     </div>
     <p class="text-xs text-text-subtle">
-      Point this at a repository that keeps one prompt per file — the shape collections such as
-      <code class="text-text-muted">togg53192-cmd/jailbreaks</code> use. Every file becomes a preset, and
-      its keywords are derived from the file name, so it covers that model on every provider and combo
-      leg without arming each id. README files and dot-directories are skipped.
+      Type or drop a source. A <span class="text-text-muted">repository</span> keeps one prompt per file
+      — the shape collections such as <code class="text-text-muted">togg53192-cmd/jailbreaks</code> use —
+      and every file becomes a preset. A <span class="text-text-muted">URL</span> is read as one prompt
+      file. A <span class="text-text-muted">dropped file</span> is uploaded from your machine. In every
+      case the name, the kind and the keywords come from the file name, so a preset covers that model on
+      every provider and combo leg without arming each id. README files and dot-directories are skipped.
     </p>
     <div class="flex flex-wrap items-center gap-3">
       <input
         type="text"
         bind:value={importTarget}
-        placeholder="owner/repo, owner/repo@branch, or a github.com URL"
-        aria-label="GitHub repository or URL"
+        placeholder="owner/repo, owner/repo@branch, a github.com URL, or any http(s) URL"
+        aria-label="Repository or URL to import"
         class="flex-1 min-w-[280px] px-3 py-2 rounded-[10px] bg-surface-2 border border-border text-sm text-text-main placeholder:text-text-subtle"
       />
       <button
@@ -420,6 +462,12 @@
             {#each importResult.imported as entry (entry.id)}
               <li class="text-xs text-text-muted">
                 <span class="text-text-main">{entry.name}</span>
+                {#if entry.kind}
+                  <span
+                    class="px-1.5 py-0.5 rounded-[6px] bg-surface-3 border border-border text-[10px] font-semibold uppercase text-text-main"
+                    >{entry.kind}</span
+                  >
+                {/if}
                 <span class="text-text-subtle"> · {entry.path}</span>
                 {#if entry.keywords.length > 0}
                   <span class="text-text-subtle"> · matches {entry.keywords.join(', ')}</span>
@@ -445,7 +493,7 @@
     {/if}
     <div class="pt-3 border-t border-border-subtle space-y-2">
       <div class="flex flex-wrap items-center gap-3">
-        <label class="text-xs text-text-subtle">…or upload a prompt file</label>
+        <span class="text-xs text-text-subtle">…or upload a prompt file</span>
         <input
           type="file"
           accept=".md,.markdown,.txt"
@@ -482,7 +530,15 @@
         {#each presets as preset (preset.id ?? preset.name)}
           <li class="flex items-center justify-between gap-3 py-2.5">
             <div class="min-w-0">
-              <div class="text-sm text-text-main truncate">{preset.name || preset.id || 'Untitled'}</div>
+              <div class="flex items-center gap-2 min-w-0">
+                <span class="text-sm text-text-main truncate">{preset.name || preset.id || 'Untitled'}</span>
+                {#if preset.kind}
+                  <span
+                    class="px-1.5 py-0.5 rounded-[6px] bg-surface-3 border border-border text-[10px] font-semibold uppercase text-text-main shrink-0"
+                    >{preset.kind}</span
+                  >
+                {/if}
+              </div>
               <div class="text-[11px] text-text-subtle truncate">
                 {preset.id}{preset.geminiSafety ? ' · safety' : ''}{preset.source ? ' · ' + preset.source : ''}{preset.keywords?.length
                   ? ' · ' + preset.keywords.length + ' keyword' + (preset.keywords.length > 1 ? 's' : '')
@@ -607,6 +663,25 @@
           class="w-full px-3 py-2 rounded-[10px] bg-surface-2 border border-border text-text-main text-sm outline-none focus:border-brand-500"
         />
       </label>
+      <label class="block space-y-1">
+        <span class="text-xs text-text-muted">Kind</span>
+        <input
+          type="text"
+          bind:value={presetForm.kind}
+          list="jailbreak-kinds"
+          placeholder="SOUL, PERSONA, AGENTS, LOAD…"
+          class="w-full px-3 py-2 rounded-[10px] bg-surface-2 border border-border text-text-main text-sm outline-none focus:border-brand-500"
+        />
+        <span class="text-[11px] text-text-subtle">
+          The instruction-file convention this preset came from. Filled in automatically on import from
+          a name such as SOUL.md or AGENTS.md; leave empty for a prompt about a model.
+        </span>
+      </label>
+      <datalist id="jailbreak-kinds">
+        {#each ['AGENTS', 'CLAUDE', 'GEMINI', 'CURSORRULES', 'WINDSURF', 'COPILOT', 'SOUL', 'PERSONA', 'IDENTITY', 'CHARACTER', 'LOAD', 'SYSTEM', 'RULES', 'POLICY', 'MODELFILE', 'CONFIG'] as kind (kind)}
+          <option value={kind}></option>
+        {/each}
+      </datalist>
       <label class="flex items-center gap-2 cursor-pointer select-none">
         <input type="checkbox" bind:checked={presetForm.geminiSafety} class="w-4 h-4 accent-brand-500" />
         <span class="text-sm text-text-main">Relax Gemini safety filters</span>

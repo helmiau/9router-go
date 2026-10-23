@@ -232,7 +232,7 @@ func SetupDashboardRoutes(r chi.Router, repo *db.Repo, chatH *chat.ChatHandler) 
 	r.Put("/api/jailbreak/models", dashH.HandleSetJailbreakModel)
 	r.Get("/api/jailbreak/excludes", dashH.HandleGetJailbreakExcludes)
 	r.Put("/api/jailbreak/excludes", dashH.HandlePutJailbreakExcludes)
-	r.Post("/api/jailbreak/import-github", dashH.HandleImportJailbreakGithub)
+	r.Post("/api/jailbreak/import", dashH.HandleImportJailbreak)
 	r.Post("/api/jailbreak/presets/upload", dashH.HandleUploadJailbreakPreset)
 
 	r.Get("/api/provider-nodes", dashH.HandleGetProviderNodes)

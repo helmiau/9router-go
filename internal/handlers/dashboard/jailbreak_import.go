@@ -1,23 +1,25 @@
 package dashboard
 
 import (
+	"9router/proxy/internal/db"
+	"9router/proxy/internal/handlerutil"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
 	"regexp"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode"
-
-	"9router/proxy/internal/db"
-	"9router/proxy/internal/handlerutil"
 )
 
 // GitHub import for the jailbreak preset library. An operator points the
@@ -65,29 +67,130 @@ type jailbreakImporter struct {
 	apiBase string
 	rawBase string
 	client  *http.Client
+	// allowPrivate lifts the network guard for a URL on the gateway's own
+	// network — an internal paste service, a LAN host. Off by default; the
+	// production importer reads JAILBREAK_IMPORT_ALLOW_PRIVATE.
+	allowPrivate bool
 }
 
 var defaultJailbreakImporter = newJailbreakImporter()
 
 // newJailbreakImporter builds the production importer. One client serves the
-// whole import, with a redirect policy that keeps every hop on GitHub.
+// whole import, with a redirect policy and a dial guard that keep every hop
+// where the operator is allowed to reach.
 func newJailbreakImporter() *jailbreakImporter {
-	return &jailbreakImporter{
+	imp := &jailbreakImporter{
 		apiBase: "https://api.github.com",
 		rawBase: "https://raw.githubusercontent.com",
-		client: &http.Client{
-			Timeout: jailbreakImportTimeout,
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if len(via) >= 5 {
-					return errors.New("too many redirects")
-				}
-				if !isGithubHost(req.URL.Hostname()) {
-					return fmt.Errorf("redirect to non-GitHub host %q refused", req.URL.Hostname())
-				}
-				return nil
-			},
+		// An operator importing from their own network has to say so; the
+		// default is public addresses only.
+		allowPrivate: os.Getenv("JAILBREAK_IMPORT_ALLOW_PRIVATE") == "1",
+	}
+	imp.client = &http.Client{
+		Timeout: jailbreakImportTimeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return errors.New("too many redirects")
+			}
+			return imp.checkRedirect(req)
+		},
+		// Control runs after the name is resolved and immediately before the
+		// connection is made, so the address that is dialled is the address
+		// that was checked. Checking earlier leaves a window in which the
+		// answer changes.
+		Transport: &http.Transport{
+			DialContext: (&net.Dialer{Control: imp.dialControl}).DialContext,
 		},
 	}
+	return imp
+}
+
+// checkRedirect refuses a hop that leaves the allowlist. GitHub is always
+// allowed; anything else must still be a well-formed http(s) URL, and the dial
+// guard enforces the address rule on the next hop.
+func (imp *jailbreakImporter) checkRedirect(req *http.Request) error {
+	if isGithubHost(req.URL.Hostname()) {
+		return nil
+	}
+	return validateJailbreakImportURL(req.URL)
+}
+
+// dialControl is the network guard. It sees the resolved address, so a
+// hostname that resolves to a private address is refused here rather than
+// after the connection exists.
+func (imp *jailbreakImporter) dialControl(_, address string, _ syscall.RawConn) error {
+	if imp.allowPrivate {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return fmt.Errorf("jailbreak import: %w", err)
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return fmt.Errorf("jailbreak import: unresolved address %q", host)
+	}
+	if !jailbreakImportPublicIP(ip) {
+		return fmt.Errorf("jailbreak import: %s is not a public address", ip)
+	}
+	return nil
+}
+
+// jailbreakImportPublicIP reports whether ip is routable on the public
+// internet. Everything a gateway can reach about itself or its neighbourhood
+// is excluded: loopback, the private ranges, link-local (which is where cloud
+// metadata lives), carrier-grade NAT, multicast, and the unspecified address.
+func jailbreakImportPublicIP(ip net.IP) bool {
+	if ip == nil || ip.IsUnspecified() || ip.IsLoopback() || ip.IsMulticast() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsInterfaceLocalMulticast() {
+		return false
+	}
+	if ip4 := ip.To4(); ip4 != nil {
+		switch {
+		case ip4[0] == 10, ip4[0] == 127:
+			return false
+		case ip4[0] == 172 && ip4[1]&0xf0 == 16:
+			return false
+		case ip4[0] == 192 && ip4[1] == 168:
+			return false
+		case ip4[0] == 100 && ip4[1]&0xc0 == 64: // 100.64.0.0/10 CGNAT
+			return false
+		case ip4[0] == 169 && ip4[1] == 254: // includes 169.254.169.254 metadata
+			return false
+		case ip4[0] == 192 && ip4[1] == 0 && ip4[2] == 2: // TEST-NET-1
+			return false
+		case ip4[0] == 198 && ip4[1] == 51 && ip4[2] == 100: // TEST-NET-2
+			return false
+		case ip4[0] == 203 && ip4[1] == 0 && ip4[2] == 113: // TEST-NET-3
+			return false
+		case ip4[0] >= 240: // reserved, includes 255.255.255.255
+			return false
+		}
+		return true
+	}
+	// Unique-local fc00::/7 is not global unicast, so it is excluded here and
+	// IsGlobalUnicast covers the rest of the IPv6 space.
+	if len(ip) == net.IPv6len && ip[0]&0xfe == 0xfc {
+		return false
+	}
+	return ip.IsGlobalUnicast()
+}
+
+// validateJailbreakImportURL checks the scheme and host of a non-GitHub URL.
+// The address itself is checked at dial time, where the resolved IP is known.
+func validateJailbreakImportURL(u *url.URL) error {
+	if u == nil {
+		return fmt.Errorf("%w: empty url", errJailbreakBadTarget)
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https":
+	default:
+		return fmt.Errorf("%w: scheme %q is not http or https", errJailbreakBadTarget, u.Scheme)
+	}
+	if strings.TrimSpace(u.Host) == "" {
+		return fmt.Errorf("%w: url has no host", errJailbreakBadTarget)
+	}
+	return nil
 }
 
 func isGithubHost(host string) bool {
@@ -124,6 +227,7 @@ type jailbreakImportEntry struct {
 	ID       string   `json:"id"`
 	Name     string   `json:"name"`
 	Path     string   `json:"path"`
+	Kind     string   `json:"kind,omitempty"`
 	Keywords []string `json:"keywords"`
 }
 
@@ -140,29 +244,56 @@ type jailbreakImportResult struct {
 	Refused  []jailbreakImportRefusal `json:"refused"`
 }
 
-// parseGithubJailbreakTarget accepts owner/repo, owner/repo@ref, and the
-// github.com, raw.githubusercontent.com and api.github.com URL forms.
-func parseGithubJailbreakTarget(target string) (githubJailbreakSource, error) {
+// jailbreakImportTarget is what the operator supplied: a GitHub repository or
+// GitHub file, or one prompt file at any other http(s) URL.
+type jailbreakImportTarget struct {
+	// Github is non-nil when the target names a GitHub repository or file.
+	Github *githubJailbreakSource
+	// URL is a single prompt file at an arbitrary address.
+	URL string
+}
+
+// parseJailbreakImportTarget accepts owner/repo, owner/repo@ref, the
+// github.com, raw.githubusercontent.com and api.github.com URL forms, and any
+// other absolute http(s) URL — which is read as one prompt file.
+func parseJailbreakImportTarget(target string) (jailbreakImportTarget, error) {
 	t := strings.TrimSpace(target)
 	if t == "" {
-		return githubJailbreakSource{}, fmt.Errorf("%w: empty target", errJailbreakBadTarget)
+		return jailbreakImportTarget{}, fmt.Errorf("%w: empty target", errJailbreakBadTarget)
 	}
 	if !strings.Contains(t, "://") {
-		return parseGithubShorthand(t)
+		src, err := parseGithubShorthand(t)
+		if err != nil {
+			return jailbreakImportTarget{}, err
+		}
+		return jailbreakImportTarget{Github: &src}, nil
 	}
 	u, err := url.Parse(t)
 	if err != nil {
-		return githubJailbreakSource{}, fmt.Errorf("%w: %v", errJailbreakBadTarget, err)
+		return jailbreakImportTarget{}, fmt.Errorf("%w: %v", errJailbreakBadTarget, err)
 	}
+	if isGithubHost(u.Hostname()) {
+		src, err := parseGithubURL(u)
+		if err != nil {
+			return jailbreakImportTarget{}, err
+		}
+		return jailbreakImportTarget{Github: &src}, nil
+	}
+	if err := validateJailbreakImportURL(u); err != nil {
+		return jailbreakImportTarget{}, err
+	}
+	return jailbreakImportTarget{URL: t}, nil
+}
+
+// parseGithubURL dispatches a GitHub URL by host.
+func parseGithubURL(u *url.URL) (githubJailbreakSource, error) {
 	switch strings.ToLower(u.Hostname()) {
 	case "github.com", "www.github.com":
 		return parseGithubWebPath(u.Path)
 	case "raw.githubusercontent.com":
 		return parseGithubRawPath(u.Path)
-	case "api.github.com":
-		return parseGithubAPIPath(u.Path)
 	default:
-		return githubJailbreakSource{}, fmt.Errorf("%w: host %q is not GitHub", errJailbreakBadTarget, u.Hostname())
+		return parseGithubAPIPath(u.Path)
 	}
 }
 
@@ -282,16 +413,66 @@ func hasGithubDotSegment(p string) bool {
 
 // importPresets parses an operator target and imports it.
 func (imp *jailbreakImporter) importPresets(ctx context.Context, repo *db.Repo, target string) (*jailbreakImportResult, error) {
-	src, err := parseGithubJailbreakTarget(target)
+	parsed, err := parseJailbreakImportTarget(target)
 	if err != nil {
 		return nil, err
 	}
-	return imp.importSource(ctx, repo, src)
+	if parsed.Github != nil {
+		return imp.importSource(ctx, repo, *parsed.Github)
+	}
+	return imp.importURL(ctx, repo, parsed.URL)
 }
 
-// importSource downloads one source and writes its prompt files as presets.
-// Every file is attempted on its own: a single refusal never aborts the rest,
-// and the result names what was skipped and why.
+// importURL fetches one prompt file from an arbitrary address and writes it as
+// a preset. The name, kind and keyword chain all come from the last path
+// segment, so a URL ending in SOUL.md produces the same preset as dropping a
+// file called SOUL.md.
+func (imp *jailbreakImporter) importURL(ctx context.Context, repo *db.Repo, rawURL string) (*jailbreakImportResult, error) {
+	body, contentType, err := imp.fetchBytes(ctx, rawURL, maxJailbreakImportFileBytes)
+	if err != nil {
+		return nil, err
+	}
+	name := jailbreakURLName(rawURL)
+	text := jailbreakImportText(body, contentType)
+	entry, err := importJailbreakDocument(repo, name, "url:"+rawURL, text, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &jailbreakImportResult{
+		Source:   rawURL,
+		Imported: []jailbreakImportEntry{*entry},
+		Refused:  make([]jailbreakImportRefusal, 0),
+	}, nil
+}
+
+// jailbreakURLName is the file name a URL points at, used as the preset name.
+// A URL with no usable path segment falls back to the host, so
+// https://paste.example.com/abc123 still names its preset something.
+func jailbreakURLName(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "prompt.md"
+	}
+	base := path.Base(u.Path)
+	if base == "" || base == "." || base == "/" {
+		return u.Hostname()
+	}
+	return base
+}
+
+// jailbreakImportText turns a fetched body into prompt text. A page served as
+// HTML is reduced to its readable text, because pasting a documentation URL
+// should not store the markup as the prompt.
+func jailbreakImportText(body []byte, contentType string) string {
+	if strings.Contains(strings.ToLower(contentType), "html") {
+		return htmlToText(string(body))
+	}
+	return string(body)
+}
+
+// importSource downloads a GitHub repository or file and writes its prompt
+// files as presets. Every file is attempted on its own: a single refusal never
+// aborts the rest, and the result names what was skipped and why.
 func (imp *jailbreakImporter) importSource(ctx context.Context, repo *db.Repo, src githubJailbreakSource) (*jailbreakImportResult, error) {
 	files, skipped, ref, err := imp.collectFiles(ctx, src)
 	if err != nil {
@@ -431,6 +612,7 @@ func importJailbreakDocument(repo *db.Repo, filePath, source, text string, claim
 		Name:     stem,
 		Prompt:   text,
 		Source:   source,
+		Kind:     jailbreakImportKind(stem),
 		Keywords: jailbreakImportKeywords(stem, claimed),
 	}
 	if err := repo.SaveJailbreakPreset(doc); err != nil {
@@ -440,7 +622,7 @@ func importJailbreakDocument(repo *db.Repo, filePath, source, text string, claim
 	for _, kw := range doc.Keywords {
 		keywords = append(keywords, kw.Text)
 	}
-	return &jailbreakImportEntry{ID: doc.ID, Name: doc.Name, Path: filePath, Keywords: keywords}, nil
+	return &jailbreakImportEntry{ID: doc.ID, Name: doc.Name, Path: filePath, Kind: doc.Kind, Keywords: keywords}, nil
 }
 
 // jailbreakClaimedStems is the set of full normalized file names in the
@@ -507,6 +689,40 @@ func normalizeJailbreakStem(stem string) string {
 		}
 	}
 	return strings.Trim(b.String(), "-")
+}
+
+// jailbreakKnownKinds are the instruction-file conventions a preset can be
+// labelled with. These are files a tool reads by name rather than prompts
+// about a model, so the label is what tells them apart in the library; a
+// prompt named after a model ("deepseek v4.md") carries no kind.
+var jailbreakKnownKinds = map[string]bool{
+	"AGENTS":      true,
+	"CLAUDE":      true,
+	"GEMINI":      true,
+	"CURSORRULES": true,
+	"WINDSURF":    true,
+	"COPILOT":     true,
+	"SOUL":        true,
+	"PERSONA":     true,
+	"IDENTITY":    true,
+	"CHARACTER":   true,
+	"LOAD":        true,
+	"SYSTEM":      true,
+	"RULES":       true,
+	"POLICY":      true,
+	"MODELFILE":   true,
+	"CONFIG":      true,
+}
+
+// jailbreakImportKind labels a preset from its file name. "SOUL.md" is a SOUL
+// preset; "deepseek v4.md" is unlabelled, because its name already says what
+// it is for.
+func jailbreakImportKind(stem string) string {
+	up := strings.ToUpper(strings.TrimSpace(stem))
+	if jailbreakKnownKinds[up] {
+		return up
+	}
+	return ""
 }
 
 func (imp *jailbreakImporter) rawURL(src githubJailbreakSource, ref, p string) string {
@@ -599,9 +815,108 @@ func (imp *jailbreakImporter) fetchText(ctx context.Context, u string, limit int
 	return string(body), nil
 }
 
-// HandleImportJailbreakGithub imports a public GitHub repository of prompts as
-// presets. POST /api/jailbreak/import-github with {"target":"owner/repo"}.
-func (h *DashboardHandler) HandleImportJailbreakGithub(w http.ResponseWriter, r *http.Request) {
+// fetchBytes is fetchText with the content type kept, so the caller can tell a
+// prompt from a page that happens to be at the end of a URL.
+func (imp *jailbreakImporter) fetchBytes(ctx context.Context, u string, limit int64) ([]byte, string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("User-Agent", "9router-go")
+	resp, err := imp.client.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, "", fmt.Errorf("GET %s: status %d", u, resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return nil, "", fmt.Errorf("GET %s: %w", u, err)
+	}
+	if int64(len(body)) > limit {
+		return nil, "", fmt.Errorf("GET %s: body exceeds %d bytes", u, limit)
+	}
+	return body, resp.Header.Get("Content-Type"), nil
+}
+
+// htmlToText reduces a page to its readable text: script, style and the whole
+// head are dropped, block boundaries become newlines, entities are decoded,
+// and runs of blank lines collapse. It is deliberately not a parser — it is
+// enough to turn a documentation URL into something usable as a prompt.
+func htmlToText(s string) string {
+	var b strings.Builder
+	skip := 0 // depth inside script/style
+	for i := 0; i < len(s); {
+		if s[i] != '<' {
+			if skip == 0 {
+				b.WriteByte(s[i])
+			}
+			i++
+			continue
+		}
+		end := strings.IndexByte(s[i:], '>')
+		if end < 0 {
+			break
+		}
+		tag := strings.ToLower(s[i+1 : i+end])
+		i += end + 1
+		switch {
+		case strings.HasPrefix(tag, "script"), strings.HasPrefix(tag, "style"), strings.HasPrefix(tag, "head"):
+			skip++
+			continue
+		case tag == "/script" || tag == "/style" || tag == "/head":
+			if skip > 0 {
+				skip--
+			}
+			continue
+		}
+		if skip > 0 {
+			continue
+		}
+		if strings.HasPrefix(tag, "br") || strings.HasPrefix(tag, "/p") ||
+			strings.HasPrefix(tag, "/div") || strings.HasPrefix(tag, "/li") ||
+			strings.HasPrefix(tag, "/h") || strings.HasPrefix(tag, "/tr") {
+			b.WriteByte('\n')
+		}
+	}
+	out := htmlUnescape(b.String())
+	// Collapse the blank runs the tag stripping leaves behind.
+	lines := strings.Split(out, "\n")
+	kept := make([]string, 0, len(lines))
+	blank := false
+	for _, ln := range lines {
+		t := strings.TrimSpace(ln)
+		if t == "" {
+			if blank {
+				continue
+			}
+			blank = true
+			kept = append(kept, "")
+			continue
+		}
+		blank = false
+		kept = append(kept, t)
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
+}
+
+// htmlUnescape decodes the entities a page is likely to carry. It is a small
+// table rather than a dependency, because the input is a prompt and not a
+// document that needs the full set.
+func htmlUnescape(s string) string {
+	repl := strings.NewReplacer(
+		"&amp;", "&", "&lt;", "<", "&gt;", ">", "&quot;", `"`, "&#39;", "'",
+		"&apos;", "'", "&nbsp;", " ", "&#x2F;", "/", "&#47;", "/",
+	)
+	return repl.Replace(s)
+}
+
+// HandleImportJailbreak imports prompts as presets. POST /api/jailbreak/import
+// with {"target":"owner/repo"} accepts a GitHub repository, a single file on
+// GitHub, or any other http(s) URL pointing at one prompt file.
+func (h *DashboardHandler) HandleImportJailbreak(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, 4*1024))
 	if err != nil {
 		handlerutil.WriteJSONError(w, http.StatusBadRequest, err.Error())
@@ -615,7 +930,7 @@ func (h *DashboardHandler) HandleImportJailbreakGithub(w http.ResponseWriter, r 
 		return
 	}
 	if strings.TrimSpace(req.Target) == "" {
-		handlerutil.WriteJSONError(w, http.StatusBadRequest, "missing target: want owner/repo or a github.com URL")
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "missing target: want owner/repo, a github.com URL, or any http(s) URL")
 		return
 	}
 	res, err := h.importer().importPresets(r.Context(), h.Repo, req.Target)
