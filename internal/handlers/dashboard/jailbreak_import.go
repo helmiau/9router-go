@@ -411,8 +411,11 @@ func hasGithubDotSegment(p string) bool {
 	return false
 }
 
-// importPresets parses an operator target and imports it.
-func (imp *jailbreakImporter) importPresets(ctx context.Context, repo *db.Repo, target string) (*jailbreakImportResult, error) {
+// importPresets parses an operator target and imports it. name is an optional
+// custom file name the operator typed (e.g. "my-prompt.md"); when it is set it
+// overrides the name derived from a URL's last path segment, so an operator can
+// give a preset a meaningful name regardless of where the prompt lives.
+func (imp *jailbreakImporter) importPresets(ctx context.Context, repo *db.Repo, target string, name string) (*jailbreakImportResult, error) {
 	parsed, err := parseJailbreakImportTarget(target)
 	if err != nil {
 		return nil, err
@@ -420,19 +423,21 @@ func (imp *jailbreakImporter) importPresets(ctx context.Context, repo *db.Repo, 
 	if parsed.Github != nil {
 		return imp.importSource(ctx, repo, *parsed.Github)
 	}
-	return imp.importURL(ctx, repo, parsed.URL)
+	return imp.importURL(ctx, repo, parsed.URL, name)
 }
 
 // importURL fetches one prompt file from an arbitrary address and writes it as
-// a preset. The name, kind and keyword chain all come from the last path
-// segment, so a URL ending in SOUL.md produces the same preset as dropping a
-// file called SOUL.md.
-func (imp *jailbreakImporter) importURL(ctx context.Context, repo *db.Repo, rawURL string) (*jailbreakImportResult, error) {
+// a preset. When the operator supplies a name, it overrides the derived filename;
+// otherwise the last path segment (SOUL.md → SOUL) is used.
+func (imp *jailbreakImporter) importURL(ctx context.Context, repo *db.Repo, rawURL string, overrideName string) (*jailbreakImportResult, error) {
 	body, contentType, err := imp.fetchBytes(ctx, rawURL, maxJailbreakImportFileBytes)
 	if err != nil {
 		return nil, err
 	}
 	name := jailbreakURLName(rawURL)
+	if overrideName != "" {
+		name = overrideName
+	}
 	text := jailbreakImportText(body, contentType)
 	entry, err := importJailbreakDocument(repo, name, "url:"+rawURL, text, nil)
 	if err != nil {
@@ -924,6 +929,7 @@ func (h *DashboardHandler) HandleImportJailbreak(w http.ResponseWriter, r *http.
 	}
 	var req struct {
 		Target string `json:"target"`
+		Name   string `json:"name,omitempty"` // optional custom file name
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
 		handlerutil.WriteJSONError(w, http.StatusBadRequest, err.Error())
@@ -933,7 +939,7 @@ func (h *DashboardHandler) HandleImportJailbreak(w http.ResponseWriter, r *http.
 		handlerutil.WriteJSONError(w, http.StatusBadRequest, "missing target: want owner/repo, a github.com URL, or any http(s) URL")
 		return
 	}
-	res, err := h.importer().importPresets(r.Context(), h.Repo, req.Target)
+	res, err := h.importer().importPresets(r.Context(), h.Repo, req.Target, req.Name)
 	if err != nil {
 		status := http.StatusBadGateway
 		if errors.Is(err, errJailbreakBadTarget) {

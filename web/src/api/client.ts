@@ -2323,10 +2323,10 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ excludes }),
     }),
-  importJailbreak: (target: string) =>
+  importJailbreak: (target: string, name?: string) =>
     request<JailbreakImportResult>('/api/jailbreak/import', {
       method: 'POST',
-      body: JSON.stringify({ target }),
+      body: JSON.stringify({ target, name: name || undefined }),
     }),
   uploadJailbreakPreset: (file: File) => {
     const form = new FormData()

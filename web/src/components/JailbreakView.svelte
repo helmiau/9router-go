@@ -50,7 +50,7 @@
   let importTarget = $state('')
   let importing = $state(false)
   let importStatus = $state('')
-  let importResult = $state<JailbreakImportResult | null>(null)
+  let importFileName = $state('')
   let uploading = $state(false)
   let dragging = $state(false)
 
@@ -113,7 +113,7 @@
     importStatus = ''
     importResult = null
     try {
-      const res = await api.importJailbreak(target)
+      const res = await api.importJailbreak(target, importFileName)
       importResult = res
       importStatus = `Imported ${res.imported.length} preset(s) from ${res.source}.`
       await load()
@@ -317,7 +317,6 @@
 <div class="space-y-6">
   <div class="flex items-center gap-2">
     <span class="material-symbols-outlined text-brand-500">lock_open</span>
-    <h1 class="text-xl font-semibold sm:text-2xl text-text-main">Jailbreak</h1>
     {#if loading}<span class="text-xs text-text-subtle">Loading…</span>{/if}
   </div>
   <p class="text-sm text-text-muted">
@@ -428,14 +427,17 @@
         {dragging ? 'Drop to import' : 'Repository, URL, or file'}
       </span>
     </div>
-    <p class="text-xs text-text-subtle">
-      Type or drop a source. A <span class="text-text-muted">repository</span> keeps one prompt per file
-      — the shape collections such as <code class="text-text-muted">togg53192-cmd/jailbreaks</code> use —
-      and every file becomes a preset. A <span class="text-text-muted">URL</span> is read as one prompt
-      file. A <span class="text-text-muted">dropped file</span> is uploaded from your machine. In every
-      case the name, the kind and the keywords come from the file name, so a preset covers that model on
-      every provider and combo leg without arming each id. README files and dot-directories are skipped.
-    </p>
+    <details class="group">
+      <summary class="cursor-pointer text-xs text-text-subtle flex items-center gap-1">
+        <span class="material-symbols-outlined text-xs">info</span>
+        Keterangan penggunaan
+      </summary>
+      <div class="pl-4 mt-2 space-y-1 text-[11px] text-text-subtle">
+        <p>A repository keeps one prompt per file — the shape collections such as togg53192-cmd/jailbreaks use.</p>
+        <p>A URL is read as one prompt file. A dropped file is uploaded from your machine.</p>
+        <p>In every case the name, the kind and the keywords come from the file name.</p>
+      </div>
+    </details>
     <div class="flex flex-wrap items-center gap-3">
       <input
         type="text"
@@ -443,6 +445,13 @@
         placeholder="owner/repo, owner/repo@branch, a github.com URL, or any http(s) URL"
         aria-label="Repository or URL to import"
         class="flex-1 min-w-[280px] px-3 py-2 rounded-[10px] bg-surface-2 border border-border text-sm text-text-main placeholder:text-text-subtle"
+      />
+      <input
+        type="text"
+        bind:value={importFileName}
+        placeholder="my-prompt.md (opsional)"
+        aria-label="Custom file name for imported preset"
+        class="w-[200px] px-3 py-2 rounded-[10px] bg-surface-2 border border-border text-sm text-text-main placeholder:text-text-subtle"
       />
       <button
         type="button"
@@ -625,7 +634,7 @@
 
 {#if presetModalOpen}
   <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" role="dialog" aria-modal="true">
-    <div class="w-full max-w-lg p-5 rounded-[14px] bg-surface border border-border space-y-4 shadow-xl">
+    <div class="w-full max-w-lg max-h-[80vh] p-5 rounded-[14px] bg-surface border border-border space-y-4 shadow-xl overflow-y-auto overflow-x-hidden">
       <h3 class="text-sm font-bold text-text-main">{editingId ? 'Edit preset' : 'New preset'}</h3>
       <label class="block space-y-1">
         <span class="text-xs text-text-muted">ID</span>
