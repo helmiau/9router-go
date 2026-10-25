@@ -53,13 +53,16 @@ func (h *DashboardHandler) HandleAutoDisableModels(w http.ResponseWriter, r *htt
 		handlerutil.WriteJSONError(w, http.StatusBadRequest, "failed to read body")
 		return
 	}
-	defer r.Body.Close()
 
 	var req autoDisableRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		handlerutil.WriteJSONError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
+	// The read already finished, so a close error here cannot change the
+	// answer — but errcheck still flags the bare defer, and the six files that
+	// spell the discard out are the ones that pass the gate.
+	defer func() { _ = r.Body.Close() }()
 	req.Provider = strings.TrimSpace(req.Provider)
 	if req.Provider == "" {
 		handlerutil.WriteJSONError(w, http.StatusBadRequest, "missing provider")
