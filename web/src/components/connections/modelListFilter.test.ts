@@ -3,6 +3,7 @@ import { strictEqual, deepStrictEqual, ok } from "node:assert";
 import {
   EMPTY_MODEL_LIST_FILTER,
   applyModelListFilter,
+  hasLatencyData,
   isModelListFilterEmpty,
   selectedVisibleIds,
   selectionState,
@@ -15,7 +16,7 @@ function row(over: Partial<ModelRowView> = {}): ModelRowView {
   return {
     id: "model-a",
     source: "registry",
-    caps: { vision: false, reasoning: false, search: false, free: false },
+    caps: { vision: false, reasoning: false, search: false, free: false, jailbreak: false },
     thinkingLevels: [],
     deprecated: false,
     disabled: false,
@@ -191,9 +192,93 @@ describe("applyModelListFilter — sort", () => {
   });
 
   test("sort does not mutate the input array", () => {
-    const input = [row({ id: "b" }), row({ id: "a" })];
-    applyModelListFilter(input, filter({ sort: "az" }));
+    const input = [row({ id: "b" }), row({ id: "a" })]
+    applyModelListFilter(input, filter({ sort: "az" }))
     deepStrictEqual(ids(input), ["b", "a"]);
+  });
+});
+
+describe("applyModelListFilter — latency sorts", () => {
+  const rows = [
+    row({ id: "slow", latencyMs: 900 }),
+    row({ id: "fast", latencyMs: 120 }),
+    row({ id: "mid", latencyMs: 400 }),
+    row({ id: "never-probed" }),
+  ];
+
+  test("latency-asc puts fastest first and unmeasured last", () => {
+    deepStrictEqual(ids(applyModelListFilter(rows, filter({ sort: "latency-asc" }))), ["fast", "mid", "slow", "never-probed"]);
+  });
+
+  test("latency-desc puts slowest first and unmeasured last", () => {
+    deepStrictEqual(ids(applyModelListFilter(rows, filter({ sort: "latency-desc" }))), ["slow", "mid", "fast", "never-probed"]);
+  });
+
+  test("latency sort does not mutate the input array", () => {
+    const input = [row({ id: "slow", latencyMs: 900 }), row({ id: "fast", latencyMs: 100 })];
+    applyModelListFilter(input, filter({ sort: "latency-asc" }));
+    deepStrictEqual(ids(input), ["slow", "fast"]);
+  });
+
+  test("ties keep the incoming order", () => {
+    const tied = [row({ id: "b", latencyMs: 200 }), row({ id: "a", latencyMs: 200 })];
+    deepStrictEqual(ids(applyModelListFilter(tied, filter({ sort: "latency-asc" }))), ["b", "a"]);
+  });
+
+  test("all-unmeasured list is unchanged by a latency sort", () => {
+    const none = [row({ id: "x" }), row({ id: "y" })];
+    deepStrictEqual(ids(applyModelListFilter(none, filter({ sort: "latency-asc" }))), ["x", "y"]);
+  });
+});
+
+describe("hasLatencyData", () => {
+  test("false when nothing has been probed", () => {
+    ok(!hasLatencyData([row({ id: "a" }), row({ id: "b" })]));
+  });
+
+  test("true when at least one row carries a measurement", () => {
+    ok(hasLatencyData([row({ id: "a" }), row({ id: "b", latencyMs: 250 })]));
+  });
+
+  test("false for an empty list", () => {
+    ok(!hasLatencyData([]));
+  });
+});
+
+describe("applyModelListFilter — register date sorts", () => {
+  const rows = [
+    row({ id: "oldest", addedAt: 1000 }),
+    row({ id: "newest", addedAt: 3000 }),
+    row({ id: "middle", addedAt: 2000 }),
+    row({ id: "registry-model" }),
+  ];
+
+  test("added-desc puts the newest first and undated rows last", () => {
+    deepStrictEqual(ids(applyModelListFilter(rows, filter({ sort: "added-desc" }))), ["newest", "middle", "oldest", "registry-model"]);
+  });
+
+  test("added-asc puts the oldest first and undated rows last", () => {
+    deepStrictEqual(ids(applyModelListFilter(rows, filter({ sort: "added-asc" }))), ["oldest", "middle", "newest", "registry-model"]);
+  });
+
+  test("undated rows keep their incoming order at the end", () => {
+    const mixed = [
+      row({ id: "dated", addedAt: 500 }),
+      row({ id: "plain-b" }),
+      row({ id: "plain-a" }),
+    ];
+    deepStrictEqual(ids(applyModelListFilter(mixed, filter({ sort: "added-desc" }))), ["dated", "plain-b", "plain-a"]);
+  });
+
+  test("a list with no dates is unchanged", () => {
+    const none = [row({ id: "x" }), row({ id: "y" })];
+    deepStrictEqual(ids(applyModelListFilter(none, filter({ sort: "added-desc" }))), ["x", "y"]);
+  });
+
+  test("sort does not mutate the input array", () => {
+    const input = [row({ id: "old", addedAt: 100 }), row({ id: "new", addedAt: 900 })];
+    applyModelListFilter(input, filter({ sort: "added-desc" }));
+    deepStrictEqual(ids(input), ["old", "new"]);
   });
 });
 

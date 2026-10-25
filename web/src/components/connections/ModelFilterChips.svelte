@@ -113,10 +113,19 @@
     },
   ])
 
+  // Every order is offered. The earlier build hid the latency orders until
+  // something had been probed, which meant the control changed shape between
+  // visits — an operator who had not tested yet could not discover the option
+  // existed. The register-date orders are always meaningful on a compatible
+  // node (every row there was added by someone) and harmless elsewhere.
   const SORT_LABELS: Record<SortMode, string> = {
     registry: 'Registry order',
+    'added-desc': 'Register date — newest',
+    'added-asc': 'Register date — oldest',
     az: 'A–Z',
     za: 'Z–A',
+    'latency-asc': 'Latency — fastest',
+    'latency-desc': 'Latency — slowest',
   }
 
   function setSort(sort: SortMode) {
@@ -163,19 +172,22 @@
           {chip.label}
         </button>
       {/each}
-      <div class="ml-auto flex items-center gap-1">
-        <span class="material-symbols-outlined text-[14px] text-text-muted">sort</span>
-        <select
-          aria-label="Sort models"
-          value={filter.sort}
-          onchange={(e) => setSort((e.target as HTMLSelectElement).value as SortMode)}
-          class="rounded-md border border-border bg-background px-1.5 py-0.5 text-[11px] text-text-main focus:border-primary focus:outline-none cursor-pointer"
-        >
-          {#each Object.entries(SORT_LABELS) as [mode, label] (mode)}
-            <option value={mode}>{label}</option>
-          {/each}
-        </select>
-      </div>
     </div>
   {/if}
+  <!-- The sort control lives outside the status row on purpose: a compatible
+       node renders no status chips at all, and nesting the dropdown inside
+       that block left it with no way to reorder its list. -->
+  <div class="flex items-center gap-1">
+    <span class="material-symbols-outlined text-[14px] text-text-muted">sort</span>
+    <select
+      aria-label="Sort models"
+      value={filter.sort}
+      onchange={(e) => setSort((e.target as HTMLSelectElement).value as SortMode)}
+      class="rounded-md border border-border bg-background px-1.5 py-0.5 text-[11px] text-text-main focus:border-primary focus:outline-none cursor-pointer"
+    >
+      {#each Object.entries(SORT_LABELS) as [mode, label] (mode)}
+        <option value={mode}>{label}</option>
+      {/each}
+    </select>
+  </div>
 </div>

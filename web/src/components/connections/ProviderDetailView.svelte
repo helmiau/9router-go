@@ -232,7 +232,7 @@
   // filter change; it is cleared on provider switch with the rest of the
   // model state (see the reset block below).
   let compatibleRows = $derived.by(() => {
-    const rows: Array<{ id: string; source: 'custom' | 'legacyAlias'; alias?: string }> = []
+    const rows: Array<{ id: string; source: 'custom' | 'legacyAlias'; alias?: string; addedAt?: number }> = []
     const seen = new Set<string>()
     for (const cm of customModels) {
       if (!cm.id || cm.providerAlias !== storageAlias) continue
@@ -240,7 +240,12 @@
       const full = `${storageAlias}/${cm.id}`
       if (seen.has(full)) continue
       seen.add(full)
-      rows.push({ id: cm.id, source: 'custom' })
+      // The kv store carries no per-row timestamp, so the add date is the
+      // position the row arrived in: the API returns the scope's keys in
+      // insertion order, and the newest write is last. A later row with the
+      // same key keeps its original position (the upsert does not move it),
+      // which is what "when was this first registered" means.
+      rows.push({ id: cm.id, source: 'custom', addedAt: customModels.length - customModels.indexOf(cm) })
     }
     const prefix = `${storageAlias}/`
     for (const [alias, full] of Object.entries(modelAliases || {})) {
@@ -288,6 +293,7 @@
         deprecated: deprecationFor(providerId, m.id) !== null,
         disabled: disabledModelIds.includes(m.id),
         testStatus: modelTestStatuses[m.id],
+        latencyMs: modelTestLatency[m.id],
       }
     })
   )
@@ -312,6 +318,8 @@
         deprecated: deprecationFor(providerId, r.id) !== null,
         disabled: false,
         testStatus: compatibleTestResults[r.id],
+        latencyMs: compatibleTestLatency[r.id],
+        addedAt: r.addedAt,
       }
     })
   )
@@ -444,6 +452,10 @@
   let copiedModelId = $state<string | null>(null)
   let modelTestStatuses = $state<Record<string, ModelTestStatus>>({})
   let modelTestErrors = $state<Record<string, string | null>>({})
+  // Round-trip time of each probe, in ms. Absent means "never measured" —
+  // which the latency sort reads as "put this row last", so it must stay
+  // absent rather than default to 0.
+  let modelTestLatency = $state<Record<string, number | undefined>>({})
   let activeModelTestError = $state<string | null>(null)
   let checkAllSummary = $state<CheckAllSummary | null>(null)
 
@@ -2265,12 +2277,19 @@
       const verdict = parseModelTestVerdict(res)
       modelTestStatuses[modelId] = verdict.status
       modelTestErrors[modelId] = verdict.error
+      // The round trip is what the latency sort orders by, so it is kept
+      // next to the verdict it came from. A failed probe still reports a
+      // latency (the request completed, the model refused), and that number
+      // is worth having; a thrown request has none, so the previous
+      // measurement is cleared rather than left stale.
+      modelTestLatency[modelId] = res.latencyMs
       if (!silent && verdict.error) {
         activeModelTestError = `${modelId}: ${verdict.error}`
       }
     } catch (err) {
       if (pid !== providerId) return
       modelTestStatuses[modelId] = 'error'
+      modelTestLatency[modelId] = undefined
       const msg = err instanceof Error ? err.message : 'Model test failed'
       modelTestErrors[modelId] = msg
       if (!silent) activeModelTestError = `${modelId}: ${msg}`
@@ -2536,7 +2555,9 @@
     compatibleTestErrors[modelId] = null
     try {
       const res = await api.testModel(`${storageAlias}/${modelId}`)
-      compatibleTestLatency[modelId] = res.latencyMs ?? 0
+      // Kept absent when the server reports nothing, so the latency sort
+      // treats it as unmeasured rather than as the fastest model on the list.
+      if (res.latencyMs !== undefined) compatibleTestLatency[modelId] = res.latencyMs
       const verdict = parseModelTestVerdict(res)
       compatibleTestResults[modelId] = verdict.status
       compatibleTestErrors[modelId] = verdict.error
@@ -4019,11 +4040,13 @@
       <p class="text-sm text-text-muted">
         Add {isAnthropicCompatibleNode ? 'Anthropic' : 'OpenAI'}-compatible models manually or import them from the /models endpoint.
       </p>
-      <!-- One action panel instead of a wrapped button row plus two loose
-           paragraphs. The buttons used to reflow onto three lines at narrow
-           widths, and the two notes below them read as prose about the page
-           rather than as the cost of the two destructive buttons they sit
-           under — they are now the buttons' own tooltips. -->
+      <!-- Row 1: the field and its own button. Row 2: the bulk actions, which
+           are a different kind of thing — they act on the whole list, not on
+           what was typed — so they get their own line instead of competing
+           with the input for width. The two cost notes stay visible under
+           row 2: they are warnings about quota and about deleting imported
+           work, and hiding them behind a hover means an operator meets the
+           consequence only after clicking. -->
       <div class="flex flex-col gap-2 rounded-lg border border-border-subtle bg-surface-2/40 p-2.5">
         <div class="flex flex-wrap items-end gap-2">
           <div class="min-w-[200px] flex-1">
@@ -4057,6 +4080,8 @@
             <span class="material-symbols-outlined text-[16px]">add</span>
             {isAddingCompatibleModel ? 'Adding...' : 'Add'}
           </button>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onclick={() => handleImportCompatibleModels(false)}
@@ -4098,6 +4123,8 @@
             {isRemovingCompatibleModels ? 'Removing...' : 'Remove all models'}
           </button>
         </div>
+        <p class="text-xs text-text-muted">Test all sends a real completion per model and consumes account quota.</p>
+        <p class="text-xs text-text-muted">Remove all deletes this node's imported models and the aliases pointing at them; models that ship with the build stay.</p>
         {#if !canImportCompatible}
           <p class="text-xs text-text-muted">Add a connection to enable importing models.</p>
         {/if}

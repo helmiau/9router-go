@@ -14,7 +14,7 @@ import { matchesSearch, parseSearchQuery, type ParsedSearchQuery } from '../../l
 
 export type ModelSource = 'registry' | 'custom' | 'legacyAlias'
 
-export type SortMode = 'registry' | 'az' | 'za'
+export type SortMode = 'registry' | 'az' | 'za' | 'latency-asc' | 'latency-desc' | 'added-desc' | 'added-asc'
 
 export type ModelTestStatus = 'ok' | 'error' | 'blocked' | 'testing'
 
@@ -40,6 +40,20 @@ export interface ModelRowView {
   disabled: boolean
   /** Verdict of the last probe, or undefined when never tested. */
   testStatus?: ModelTestStatus
+  /**
+   * Round-trip time of the last successful probe, in milliseconds.
+   * Undefined when the model has never been probed — which is what makes
+   * the latency sorts put the unmeasured rows last rather than treating
+   * them as zero.
+   */
+  latencyMs?: number
+  /**
+   * When the row was registered, as epoch milliseconds. Only custom rows
+   * carry one — a registry model ships with the build and has no add date —
+   * so the register-date sorts keep those in registry order at the end
+   * rather than pretending they were added at the epoch.
+   */
+  addedAt?: number
 }
 
 export interface ModelListFilter {
@@ -176,6 +190,40 @@ function matchesQuery(parsed: ParsedSearchQuery, row: ModelRowView): boolean {
 function sortRows(rows: ModelRowView[], sort: SortMode): ModelRowView[] {
   if (sort === 'registry') return rows
   const sorted = [...rows]
+  if (sort === 'latency-asc' || sort === 'latency-desc') {
+    // A model nobody has probed has no latency, and sorting it as zero would
+    // put the unmeasured rows at the top of "fastest" — the operator would
+    // read a blank as a win. They go last in both directions, and ties keep
+    // the incoming order so the sort is stable rather than arbitrary.
+    const measured = (r: ModelRowView) => r.latencyMs ?? Number.POSITIVE_INFINITY
+    sorted.sort((a, b) => measured(a) - measured(b))
+    if (sort === 'latency-desc') {
+      // Reverse only the measured prefix: flipping the whole array would move
+      // the unmeasured rows to the front, which is the one place they must
+      // not be.
+      const measuredCount = sorted.filter((r) => r.latencyMs !== undefined).length
+      const head = sorted.slice(0, measuredCount).reverse()
+      const tail = sorted.slice(measuredCount)
+      return [...head, ...tail]
+    }
+    return sorted
+  }
+  if (sort === 'added-desc' || sort === 'added-asc') {
+    // Registry models have no add date; they sort after every dated row
+    // instead of collapsing to 1970. Within the dated rows the newest comes
+    // first for 'added-desc', which is what "what did I add recently?" means.
+    const dated = (r: ModelRowView) => r.addedAt ?? Number.NEGATIVE_INFINITY
+    sorted.sort((a, b) => dated(b) - dated(a))
+    if (sort === 'added-asc') {
+      // Reverse only the dated prefix: flipping the whole array would move
+      // the undated rows to the front, the one place they must not be.
+      const datedCount = sorted.filter((r) => r.addedAt !== undefined).length
+      const head = sorted.slice(0, datedCount).reverse()
+      const tail = sorted.slice(datedCount)
+      return [...head, ...tail]
+    }
+    return sorted
+  }
   // Case-insensitive, matching compatibleRows' display sort: ids are
   // lower-case by convention but vendor catalogues are not.
   sorted.sort((a, b) => a.id.localeCompare(b.id, undefined, { sensitivity: 'base' }))
@@ -192,6 +240,15 @@ export function applyModelListFilter(rows: ModelRowView[], filter: ModelListFilt
   const parsed = parseSearchQuery(filter.query)
   const filtered = rows.filter((row) => matchesQuery(parsed, row) && matchesGroups(filter, row))
   return sortRows(filtered, filter.sort)
+}
+
+/**
+ * Whether any row carries a measured latency. The sort dropdown offers the
+ * latency orders only when this is true: picking "fastest first" on a list
+ * nobody has probed yet would reorder nothing and look broken.
+ */
+export function hasLatencyData(rows: ModelRowView[]): boolean {
+  return rows.some((r) => r.latencyMs !== undefined)
 }
 
 /**
