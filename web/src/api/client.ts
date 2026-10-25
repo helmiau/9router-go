@@ -1554,6 +1554,25 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(modelIds),
     }),
+  /**
+   * Folds a list of dead model ids into the provider's disabled list.
+   *
+   * The merge happens server-side on purpose: the dashboard already holds the
+   * verdicts from its own probes, and sending only the failures avoids a
+   * read-modify-write from the browser — which is how two open tabs disable
+   * each other's models.
+   */
+  autoDisableModels: (provider: string, models: string[], dryRun = false) =>
+    request<{
+      provider: string
+      disabled: string[]
+      alreadyDisabled: string[]
+      total: number
+      dryRun: boolean
+    }>('/api/models/auto-disable', {
+      method: 'POST',
+      body: JSON.stringify({ provider, models, dryRun }),
+    }),
   /** Upstream GET /api/models/alias — full alias map (compatible pages merge custom + legacy rows). */
   getModelAliases: () => request<{ aliases: Record<string, string> }>('/api/models/alias'),
   /** Upstream PUT /api/models/alias {model, alias}. */
