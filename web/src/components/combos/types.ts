@@ -11,6 +11,14 @@ export interface ComboStrategyInfo {
   confidenceThreshold?: number
   /** System One model that evaluates the route; empty means the free default. */
   routerModel?: string
+  /**
+   * Skip the rotation strategy and walk the combo's stored model list in
+   * order, so the ordering arranged in the editor is the fallback chain.
+   * The capability reorder still runs: a request that needs vision must
+   * float a capable model to the front. No effect on the smart strategy,
+   * which orders the models itself.
+   */
+  respectStoredOrder?: boolean
 }
 
 /**
