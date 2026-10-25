@@ -149,6 +149,8 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		r.Get("/models/disabled", h.HandleGetDisabledModels)
 		r.Put("/models/disabled/{provider}", h.HandleSaveDisabledModels)
 		r.Post("/models/auto-disable", h.HandleAutoDisableModels)
+		r.Get("/models/health", h.HandleGetModelHealth)
+		r.Put("/models/health", h.HandleSaveModelHealth)
 
 		// Settings
 		r.Get("/settings", h.HandleGetSettings)
