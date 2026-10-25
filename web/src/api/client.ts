@@ -1372,6 +1372,18 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ matchRules }),
     }),
+  /** Materialise the previewed rules into the combo's membership (merge). */
+  loadComboRules: (id: string, matchRules: SmartRule[]) =>
+    request<{
+      combo: string
+      added: string[]
+      removed: string[]
+      models: string[]
+      changed: boolean
+    }>(`/api/combos/${encodeURIComponent(id)}/smart/load`, {
+      method: 'POST',
+      body: JSON.stringify({ matchRules }),
+    }),
   /** Apply every combo's rules now, or just the named one. */
   reconcileCombos: (id?: string) =>
     request<{ status: string; reconciled: number; added: string[]; removed: string[] }>(

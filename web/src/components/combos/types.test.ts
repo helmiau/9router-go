@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { COMBO_STRATEGIES, resolveComboStrategy } from './types'
+import { COMBO_STRATEGIES, resolveComboStrategy, sortMembersByProvider } from './types'
 
 const OPTION_VALUES = COMBO_STRATEGIES.map((s) => s.value)
 
@@ -51,5 +51,48 @@ describe('resolveComboStrategy', () => {
       expect(strategy.value.length).toBeGreaterThan(0)
       expect(strategy.label.length).toBeGreaterThan(0)
     }
+  })
+})
+
+describe('sortMembersByProvider', () => {
+  // The tool is a one-shot grouping, not a standing sort: the operator presses
+  // it and can drag anything back. So the order INSIDE a group must survive —
+  // re-sorting within a provider would discard the fallback ordering the
+  // operator arranged.
+  it('groups by provider and keeps the order inside each group', () => {
+    const input = ['ds/beta', 'oc/alpha', 'ds/alpha', 'cutad/gamma', 'oc/beta']
+    expect(sortMembersByProvider(input)).toEqual([
+      'ds/beta',
+      'ds/alpha',
+      'oc/alpha',
+      'oc/beta',
+      'cutad/gamma'
+    ])
+  })
+
+  it('orders providers by first appearance, not alphabetically', () => {
+    // The operator put zzz first on purpose; alphabetical provider order would
+    // move it last and discard that.
+    expect(sortMembersByProvider(['zzz/a', 'aaa/b'])).toEqual(['zzz/a', 'aaa/b'])
+  })
+
+  it('keeps members without a provider segment in a trailing group', () => {
+    expect(sortMembersByProvider(['ds/a', 'bare', 'oc/b'])).toEqual(['ds/a', 'oc/b', 'bare'])
+  })
+
+  it('is a no-op on an already grouped list', () => {
+    const grouped = ['ds/a', 'ds/b', 'oc/c']
+    expect(sortMembersByProvider(grouped)).toEqual(grouped)
+  })
+
+  it('handles an empty list', () => {
+    expect(sortMembersByProvider([])).toEqual([])
+  })
+
+  it('does not mutate the input', () => {
+    const input = ['oc/a', 'ds/b']
+    const copy = [...input]
+    sortMembersByProvider(input)
+    expect(input).toEqual(copy)
   })
 })

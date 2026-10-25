@@ -277,6 +277,45 @@ export function smartRuleCount(combo: Combo): number {
   return parseSmartRules(combo.matchRules).length
 }
 
+/**
+ * Group a combo's members by provider, keeping the order inside each group.
+ *
+ * A combo is a fallback chain, so the ordering is the operator's to arrange —
+ * this is a one-shot tool, not a standing sort: the operator presses it, sees
+ * the grouped order, and can drag anything back. The provider key is the
+ * segment before the first "/", and a member without one keeps its own
+ * position in a trailing group rather than being folded into the first
+ * provider's block.
+ *
+ * Providers are ordered by first appearance, not alphabetically: the operator
+ * arranged the first member of each provider deliberately, and re-sorting the
+ * providers themselves would discard that.
+ */
+export function sortMembersByProvider(models: string[]): string[] {
+  const groups = new Map<string, string[]>()
+  const order: string[] = []
+  const bare: string[] = []
+  for (const m of models) {
+    const slash = m.indexOf('/')
+    if (slash <= 0) {
+      bare.push(m)
+      continue
+    }
+    const provider = m.slice(0, slash)
+    let group = groups.get(provider)
+    if (!group) {
+      group = []
+      groups.set(provider, group)
+      order.push(provider)
+    }
+    group.push(m)
+  }
+  const out: string[] = []
+  for (const provider of order) out.push(...(groups.get(provider) ?? []))
+  out.push(...bare)
+  return out
+}
+
 /** Whether a member is owned by a rule rather than pinned by the operator. */
 export function isAutoMember(combo: Combo, model: string): boolean {
   return Array.isArray(combo.autoMembers) && combo.autoMembers.includes(model)

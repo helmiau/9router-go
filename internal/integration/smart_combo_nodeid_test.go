@@ -401,3 +401,143 @@ func TestSmartRulesSegmentNegation(t *testing.T) {
 		t.Fatalf("a leading negation must be refused: status = %d, body = %s", res2.Status, truncate(res2.Body))
 	}
 }
+
+// The load endpoint is the write half of the preview, and its merge semantics
+// are the point: the models the rules claim are added, the models no rule
+// claims any more are removed, and the models the operator pinned by hand are
+// left exactly where they are. A replace would drop those pins; an append
+// would leave stale rule-owned members behind.
+func TestSmartRulesLoadMergesWithoutDroppingPins(t *testing.T) {
+	env := newEnv(t)
+	upstream := env.NewUpstream(t, chatCompletionResponder())
+	if _, err := env.Repo.CreateProviderNode("node-cutad", "openai-compatible", "CutadAI",
+		`{"prefix":"cutad","apiType":"openai-compatible"}`); err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+	priority := 1
+	data := `{"apiKey":"sk-cutad","baseUrl":"` + upstream.URL + `/chat/completions","providerSpecificData":{"prefix":"cutad"}}`
+	if err := env.Repo.CreateProviderConnectionFull("conn-cutad", "node-cutad", "apikey", "Cutad", &priority, data); err != nil {
+		t.Fatalf("create connection: %v", err)
+	}
+	for _, m := range []string{"deepseek-v4-flash", "glm-5"} {
+		if err := env.Repo.SetKV("customModels", "node-cutad|"+m+"|llm",
+			`{"providerAlias":"node-cutad","id":"`+m+`","type":"llm"}`); err != nil {
+			t.Fatalf("seed %s: %v", m, err)
+		}
+	}
+	// A pinned model the operator chose by hand. A stale member that is no
+	// longer live is NOT dropped: absence from the catalogue is weak evidence
+	// of death (the same reading the reconcile path applies), so only a live
+	// member the rules no longer claim is removed.
+	env.AddCombo(t, "combo-load", "load", []string{"ds/pinned", "cutad/old-model"})
+	res := env.Post(t, "/api/combos/combo-load/smart/load", map[string]any{"matchRules": []any{
+		map[string]any{"pattern": "cutad/*", "mode": "glob"},
+	}})
+	if res.Status != http.StatusOK {
+		t.Fatalf("POST load = %d, want 200 (body: %s)", res.Status, truncate(res.Body))
+	}
+	var out struct {
+		Added   []string `json:"added"`
+		Removed []string `json:"removed"`
+		Models  []string `json:"models"`
+		Changed bool     `json:"changed"`
+	}
+	if err := json.Unmarshal(res.Body, &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !out.Changed {
+		t.Fatal("changed = false, want the membership written")
+	}
+	// The pin survives, the dead member is kept (weak evidence of death), and
+	// the two matches land.
+	if !slices.Equal(out.Models, []string{"ds/pinned", "cutad/old-model", "cutad/deepseek-v4-flash", "cutad/glm-5"}) {
+		t.Fatalf("models = %v, want the pin kept and the matches added", out.Models)
+	}
+	if !slices.Contains(out.Added, "cutad/deepseek-v4-flash") || !slices.Contains(out.Added, "cutad/glm-5") {
+		t.Fatalf("added = %v, want both matches", out.Added)
+	}
+	if len(out.Removed) != 0 {
+		t.Fatalf("removed = %v, want nothing removed", out.Removed)
+	}
+	// The rules travelled with the membership: the snapshot each rule carries
+	// is what a later reconcile reads to know which members it owns.
+	stored, err := env.Repo.GetComboRules(t.Context(), "combo-load")
+	if err != nil {
+		t.Fatalf("GetComboRules: %v", err)
+	}
+	if stored == "" || stored == "[]" {
+		t.Fatalf("stored rules = %q, want the rule list persisted", stored)
+	}
+	// A second load with the same rules is a no-op, and the pin is still there.
+	res2 := env.Post(t, "/api/combos/combo-load/smart/load", map[string]any{"matchRules": []any{
+		map[string]any{"pattern": "cutad/*", "mode": "glob"},
+	}})
+	if res2.Status != http.StatusOK {
+		t.Fatalf("second POST load = %d, want 200 (body: %s)", res2.Status, truncate(res2.Body))
+	}
+	var out2 struct {
+		Models  []string `json:"models"`
+		Changed bool     `json:"changed"`
+	}
+	if err := json.Unmarshal(res2.Body, &out2); err != nil {
+		t.Fatalf("decode second: %v", err)
+	}
+	if out2.Changed {
+		t.Error("a second load with the same rules must report no change")
+	}
+	if !slices.Equal(out2.Models, out.Models) {
+		t.Fatalf("models = %v, want them unchanged", out2.Models)
+	}
+}
+
+// A combo that asked to respect its stored order skips the rotation strategy
+// and walks the list as-is. The capability reorder stays: a request that needs
+// vision must still float a capable model to the front, or the chain would
+// offer a text-only model and fail.
+func TestComboRespectStoredOrder(t *testing.T) {
+	env := newEnv(t)
+	upstream := env.NewUpstream(t, chatCompletionResponder())
+	priority := 1
+	data := `{"apiKey":"sk-x","baseUrl":"` + upstream.URL + `/chat/completions"}`
+	if err := env.Repo.CreateProviderConnectionFull("conn-a", "deepseek", "apikey", "A", &priority, data); err != nil {
+		t.Fatalf("create conn a: %v", err)
+	}
+	if err := env.Repo.CreateProviderConnectionFull("conn-b", "openrouter", "apikey", "B", &priority, data); err != nil {
+		t.Fatalf("create conn b: %v", err)
+	}
+	// Two live registry models, stored in a deliberate order.
+	env.AddCombo(t, "combo-order", "order", []string{"ds/deepseek-chat", "oc/gpt-4o"})
+	// Round-robin would rotate the first model away on a new turn; the flag
+	// pins the stored order instead.
+	if err := env.Repo.UpdateSettingsRaw(map[string]any{
+		"comboStrategies": map[string]any{
+			"order": map[string]any{
+				"strategy":           "round-robin",
+				"respectStoredOrder": true,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("set strategy: %v", err)
+	}
+	// Two consecutive requests must both start at the stored first member:
+	// round-robin would have moved to the second one on the second turn.
+	for i := range 2 {
+		res := env.Post(t, "/chat/completions", map[string]any{
+			"model":    "order",
+			"messages": []any{map[string]any{"role": "user", "content": "hi"}},
+		})
+		if res.Status != http.StatusOK {
+			t.Fatalf("chat %d = %d, want 200 (body: %s)", i+1, res.Status, truncate(res.Body))
+		}
+		// The upstream records the bare model id, so the assertion is on that.
+		if got := upstream.Last(t).Model(t); got != "deepseek-chat" {
+			t.Fatalf("request %d used %q, want the stored order's first member", i+1, got)
+		}
+	}
+	// The flag's effect is that the rotation is skipped entirely, which the
+	// stored order above already shows. The converse — that the same combo
+	// without the flag goes through the rotation path — is pinned by the unit
+	// test on applyComboStrategy rather than here: the rotation pointer needs
+	// several turns to advance, and a request-level test of it would be
+	// asserting the strategy's own cadence instead of the flag's bypass.
+}
