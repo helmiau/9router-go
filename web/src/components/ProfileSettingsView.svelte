@@ -27,6 +27,9 @@
     isDetailsExpandedByDefault,
     setAdvancedSettingsVisible,
     setDetailsExpandedByDefault,
+    ANIMATION_LEVELS,
+    getAnimationLevel,
+    setAnimationLevel,
   } from '../lib/displayPrefs'
   import {
     USAGE_PANEL_FIXED_POSITION,
@@ -111,6 +114,9 @@
   // Provider card on/off switch visibility (providerTogglePersistent,
   // localStorage). On = always visible; off = hover reveal on desktop.
   let providerTogglePersistent = $state(isProviderTogglePersistent())
+  // Animation level (displayAnimationLevel, localStorage). Applied to <html> so
+  // the global rules in index.css can read it without per-component classes.
+  let animationLevel = $state(getAnimationLevel())
   let compactUnits = $state(isCompactUnitsEnabled())
   // Usage detail panels (Activity Heatmap, Node Health) start collapsed; the
   // switch below flips that default (detailsExpandedByDefault, localStorage).
@@ -1373,6 +1379,24 @@
             providerTogglePersistent = val
           }}
         />
+      </div>
+      <div class="flex items-center justify-between gap-3 border-t border-border pt-3">
+        <div class="min-w-0">
+          <p class="text-xs font-semibold text-text-main">Animation level</p>
+          <p class="text-[11px] text-text-subtle">
+            How much the dashboard animates. Minimal drops blur and transitions but
+            keeps loading spinners; Off stops those too.
+          </p>
+        </div>
+        <select
+          bind:value={animationLevel}
+          onchange={() => setAnimationLevel(animationLevel)}
+          class="shrink-0 rounded-lg border border-border bg-bg px-2 py-1 text-xs text-text-main focus:outline-none focus:border-brand-500 cursor-pointer"
+        >
+          {#each ANIMATION_LEVELS as option (option.id)}
+            <option value={option.id}>{option.label}</option>
+          {/each}
+        </select>
       </div>
       <div class="space-y-3 border-t border-border pt-3">
         <p class="text-xs font-semibold text-text-main">Currency</p>
