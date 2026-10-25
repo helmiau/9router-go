@@ -21,7 +21,7 @@
   import Button from '../lib/ui/Button.svelte'
   import Input from '../lib/ui/Input.svelte'
   import { api, getAuthHeaders, responseErrorMessage, type DatabaseStats, type Settings } from '../api/client'
-  import { isCompactUnitsEnabled, setCompactUnits } from '../lib/compactNumber'
+  import { isCompactUnitsEnabled, isProviderTogglePersistent, setCompactUnits, setProviderTogglePersistent } from '../lib/compactNumber'
   import {
     isAdvancedSettingsVisible,
     isDetailsExpandedByDefault,
@@ -108,6 +108,9 @@
   let fallbackStrategy = $state('failover')
   // Unit abbreviation is a localStorage-only preference (compactUnits key);
   // there is no server-side setting for it.
+  // Provider card on/off switch visibility (providerTogglePersistent,
+  // localStorage). On = always visible; off = hover reveal on desktop.
+  let providerTogglePersistent = $state(isProviderTogglePersistent())
   let compactUnits = $state(isCompactUnitsEnabled())
   // Usage detail panels (Activity Heatmap, Node Health) start collapsed; the
   // switch below flips that default (detailsExpandedByDefault, localStorage).
@@ -1353,11 +1356,24 @@
             advancedSettings = isAdvancedSettingsVisible()
           }}
         />
+      <div class="flex items-center justify-between gap-3">
+        <div class="min-w-0">
+          <p class="text-xs font-semibold text-text-main">Provider card toggle</p>
+          <p class="text-[11px] text-text-subtle">
+            Show the on/off switch on each provider card permanently on desktop
+            instead of revealing it on hover.
+          </p>
+        </div>
+        <Toggle
+          checked={providerTogglePersistent}
+          size="sm"
+          label="Provider card toggle persistence"
+          onChange={(val) => {
+            setProviderTogglePersistent(val)
+            providerTogglePersistent = val
+          }}
+        />
       </div>
-
-      <!-- Currency: the display currency every cost surface reads, kept here
-           because it is one of these preferences rather than a section of its
-           own. The catalog and the formatting rules live in lib/currency.ts. -->
       <div class="space-y-3 border-t border-border pt-3">
         <p class="text-xs font-semibold text-text-main">Currency</p>
 
