@@ -541,3 +541,82 @@ func TestComboRespectStoredOrder(t *testing.T) {
 	// several turns to advance, and a request-level test of it would be
 	// asserting the strategy's own cadence instead of the flag's bypass.
 }
+
+// The combo editor's sort dropdown reads one endpoint for everything it needs:
+// latency, context window, kind and capabilities. The spellings are the point —
+// the latency ring and the custom-model rows are keyed by the node id, while a
+// combo member is spelled with the display prefix, so a lookup by the member's
+// own spelling has to hit.
+func TestModelMetaPublishesBothSpellings(t *testing.T) {
+	env := newEnv(t)
+	upstream := env.NewUpstream(t, chatCompletionResponder())
+	if _, err := env.Repo.CreateProviderNode("node-cutad", "openai-compatible", "CutadAI",
+		`{"prefix":"cutad","apiType":"openai-compatible"}`); err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+	priority := 1
+	data := `{"apiKey":"sk-cutad","baseUrl":"` + upstream.URL + `/chat/completions","providerSpecificData":{"prefix":"cutad"}}`
+	if err := env.Repo.CreateProviderConnectionFull("conn-cutad", "node-cutad", "apikey", "Cutad", &priority, data); err != nil {
+		t.Fatalf("create connection: %v", err)
+	}
+	// A custom row carrying the operator's own declarations: kind, capability
+	// flags and context window.
+	if err := env.Repo.SetKV("customModels", "node-cutad|deepseek-v4-flash|llm",
+		`{"providerAlias":"node-cutad","id":"deepseek-v4-flash","type":"llm","contextWindow":131072,"caps":{"vision":true,"reasoning":true}}`); err != nil {
+		t.Fatalf("seed custom model: %v", err)
+	}
+	// One observation in the ring, recorded against the node id.
+	if _, err := env.Repo.RawDB().Exec(
+		`INSERT INTO requestDetails (id, timestamp, provider, model, connectionId, status, data)
+		 VALUES ('req-meta-1', '2026-10-06T01:00:00Z', 'node-cutad', 'deepseek-v4-flash', 'conn-cutad', 'success', ?)`,
+		`{"latency":{"ttft":250,"total":900}}`,
+	); err != nil {
+		t.Fatalf("seed request detail: %v", err)
+	}
+	res := env.Get(t, "/api/models/meta")
+	if res.Status != http.StatusOK {
+		t.Fatalf("GET meta = %d, want 200 (body: %s)", res.Status, truncate(res.Body))
+	}
+	var out struct {
+		Meta map[string]struct {
+			Provider      string `json:"provider"`
+			Model         string `json:"model"`
+			TTFTMs        int64  `json:"ttftMs"`
+			TotalMs       int64  `json:"totalMs"`
+			Samples       int64  `json:"samples"`
+			ContextWindow int    `json:"contextWindow"`
+			Kind          string `json:"kind"`
+			Vision        bool   `json:"vision"`
+			Reasoning     bool   `json:"reasoning"`
+		} `json:"meta"`
+	}
+	if err := json.Unmarshal(res.Body, &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// The node-id spelling carries everything the sources declared.
+	byNodeID, ok := out.Meta["node-cutad|deepseek-v4-flash"]
+	if !ok {
+		t.Fatalf("node-id key missing from %v", out.Meta)
+	}
+	if byNodeID.TTFTMs != 250 || byNodeID.TotalMs != 900 || byNodeID.Samples != 1 {
+		t.Errorf("latency = %+v, want ttft 250 / total 900 / 1 sample", byNodeID)
+	}
+	if byNodeID.ContextWindow != 131072 {
+		t.Errorf("contextWindow = %d, want the operator's 131072", byNodeID.ContextWindow)
+	}
+	if byNodeID.Kind != "llm" {
+		t.Errorf("kind = %q, want llm", byNodeID.Kind)
+	}
+	if !byNodeID.Vision || !byNodeID.Reasoning {
+		t.Errorf("caps = %+v, want vision and reasoning from the custom row", byNodeID)
+	}
+	// The prefix spelling — the one a combo member uses — finds the same row.
+	byPrefix, ok := out.Meta["cutad|deepseek-v4-flash"]
+	if !ok {
+		t.Fatalf("prefix key missing from %v", out.Meta)
+	}
+	if byPrefix.TTFTMs != byNodeID.TTFTMs || byPrefix.ContextWindow != byNodeID.ContextWindow ||
+		byPrefix.Vision != byNodeID.Vision {
+		t.Errorf("prefix entry = %+v, want the same numbers as the node-id entry", byPrefix)
+	}
+}

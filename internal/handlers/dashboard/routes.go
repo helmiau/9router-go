@@ -102,6 +102,7 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		r.Post("/combos/reconcile", h.HandleReconcileSmartCombos)
 		r.Post("/combos/{id}/smart/preview", h.HandleComboSmartPreview)
 		r.Post("/combos/{id}/smart/load", h.HandleComboSmartLoad)
+		r.Get("/models/meta", h.HandleGetModelMeta)
 		r.Delete("/combos/{id}", h.HandleDeleteCombo)
 
 		// Proxy Pools

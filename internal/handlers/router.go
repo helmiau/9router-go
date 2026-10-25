@@ -254,6 +254,7 @@ func SetupDashboardRoutes(r chi.Router, repo *db.Repo, chatH *chat.ChatHandler) 
 	r.Post("/api/combos/reconcile", dashH.HandleReconcileSmartCombos)
 	r.Post("/api/combos/{id}/smart/preview", dashH.HandleComboSmartPreview)
 	r.Post("/api/combos/{id}/smart/load", dashH.HandleComboSmartLoad)
+	r.Get("/api/models/meta", dashH.HandleGetModelMeta)
 	r.Delete("/api/combos/{id}", dashH.HandleDeleteCombo)
 
 	r.Get("/api/proxy-pools", dashH.HandleGetProxyPools)

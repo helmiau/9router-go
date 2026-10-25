@@ -1390,6 +1390,25 @@ export const api = {
       id ? `/api/combos/reconcile?id=${encodeURIComponent(id)}` : '/api/combos/reconcile',
       { method: 'POST' },
     ),
+  /** Everything the combo editor's sort dropdown knows about each model. */
+  getModelMeta: () =>
+    request<{
+      meta: Record<
+        string,
+        {
+          provider: string
+          model: string
+          ttftMs: number
+          totalMs: number
+          samples: number
+          contextWindow: number
+          kind: string
+          vision: boolean
+          reasoning: boolean
+          audioInput: boolean
+        }
+      >
+    }>('/api/models/meta'),
 
   // API Keys
   getApiKeys: () => request<APIKey[]>('/api/keys'),

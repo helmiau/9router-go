@@ -1,7 +1,6 @@
 <script lang="ts">
   import {
     ArrowDown,
-    ArrowDownUp,
     ArrowUp,
     Brain,
     Eye,
@@ -17,12 +16,14 @@
   import Input from '../../lib/ui/Input.svelte'
   import Modal from '../../lib/ui/Modal.svelte'
   import {
+    COMBO_SORT_OPTIONS,
     DEFAULT_SMART_RULE_MAX_MEMBERS,
     parseSmartRules,
     SMART_RULE_MODES,
     smartRuleSummary,
-    sortMembersByProvider
+    sortComboMembers
   } from './types'
+  import type { ComboSortKey, ModelMetaMap } from './types'
 
   interface Props {
     isOpen: boolean
@@ -135,19 +136,48 @@
       isLoadingModels = false
     }
   }
-  // Group by provider is a one-shot tool, not a standing sort: the operator
-  // presses it, sees the grouped order, and can drag anything back. Sorting on
-  // every rule run would fight the manual ordering the same way the
-  // alphabetical maxMembers cut used to.
-  function sortByProvider() {
-    const sorted = sortMembersByProvider(models)
+  // Sort: a one-shot reorder of the stored list. The operator picks an option,
+  // the list is rewritten, and anything can be dragged back afterwards — none
+  // of these is a standing order the gateway re-applies on every rule run,
+  // which is what kept the alphabetical maxMembers cut from fighting the
+  // manual ordering.
+  let sortKey = $state<ComboSortKey>('manual')
+  let sortNote = $state('')
+  let modelMeta = $state<ModelMetaMap | null>(null)
+  // Four of the options need data the editor does not already hold, so it is
+  // fetched lazily on first use rather than on every open.
+  async function ensureMeta() {
+    if (modelMeta) return
+    try {
+      const res = await api.getModelMeta()
+      modelMeta = res.meta
+    } catch {
+      // A failed read must not block the other sorts: the options simply
+      // behave as "nothing known", which leaves the order unchanged rather
+      // than guessing at it.
+      modelMeta = {}
+    }
+  }
+  async function applySort(key: ComboSortKey) {
+    sortKey = key
+    if (key === 'latency' || key === 'context-window' || key === 'capabilities' || key === 'kind') {
+      await ensureMeta()
+    }
+    const sorted = sortComboMembers(models, key, modelMeta ?? undefined)
     if (sorted.length !== models.length) return
+    let changed = false
     for (let i = 0; i < sorted.length; i++) {
       if (sorted[i] !== models[i]) {
-        onUpdateModels(sorted)
-        return
+        changed = true
+        break
       }
     }
+    if (!changed) {
+      sortNote = 'already in this order'
+      return
+    }
+    onUpdateModels(sorted)
+    sortNote = key === 'shuffle' ? 'shuffled once' : 'sorted'
   }
 
   function rulePreviewFor(id: string) {
@@ -479,16 +509,23 @@
       <div class="flex items-center justify-between mb-1.5">
         <label class="text-sm font-medium">Models</label>
         <div class="flex items-center gap-1.5">
-          <button
-            type="button"
-            onclick={sortByProvider}
-            disabled={models.length < 2}
-            class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-text-muted hover:text-brand-500 hover:bg-brand-500/10 transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-            title="Group members by provider, keeping the order inside each group"
+          <!-- Sort: a one-shot reorder of the stored list. The operator picks
+               an option, the list is rewritten, and anything can be dragged
+               back afterwards — none of these is a standing order the gateway
+               re-applies on every rule run. -->
+          <select
+            value={sortKey}
+            onchange={(e) => applySort(e.currentTarget.value as ComboSortKey)}
+            class="rounded border border-border bg-surface px-1.5 py-0.5 text-[11px] text-text-main focus:outline-none focus:border-brand-500 cursor-pointer"
+            title="Reorder the members once. You can drag anything back afterwards."
           >
-            <ArrowDownUp class="w-3 h-3" />
-            <span>Group by provider</span>
-          </button>
+            {#each COMBO_SORT_OPTIONS as opt (opt.value)}
+              <option value={opt.value} title={opt.hint}>{opt.label}</option>
+            {/each}
+          </select>
+          {#if sortNote}
+            <span class="text-[10px] text-text-subtle">{sortNote}</span>
+          {/if}
           <button
             type="button"
             onclick={onOpenModelPicker}
