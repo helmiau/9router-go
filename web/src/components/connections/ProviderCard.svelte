@@ -96,7 +96,7 @@
       <div class="flex shrink-0 items-center gap-2">
         {#if stats.total > 0}
           <div
-            class="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
+            class="opacity-100 transition-opacity"
             onclick={(e) => {
               e.stopPropagation()
               onToggleAll?.(isAllDisabled)
