@@ -4019,81 +4019,89 @@
       <p class="text-sm text-text-muted">
         Add {isAnthropicCompatibleNode ? 'Anthropic' : 'OpenAI'}-compatible models manually or import them from the /models endpoint.
       </p>
-      <div class="flex items-end gap-2 flex-wrap">
-        <div class="flex-1 min-w-[240px]">
-          <label for="new-compatible-model-input" class="text-xs text-text-muted mb-1 block">Model ID</label>
-          <input
-            id="new-compatible-model-input"
-            type="text"
-            bind:value={newCompatibleModel}
-            onkeydown={(e) => { if (e.key === 'Enter') handleAddCompatibleModel() }}
-            placeholder={isAnthropicCompatibleNode ? 'claude-3-opus-20240229' : 'gpt-4o — paste a list for several'}
-            class="w-full px-3 py-2 text-sm border border-border rounded-lg bg-background focus:outline-none focus:border-primary"
-          />
-          {#if newCompatibleModelsPlan.ids.length > 1 || newCompatibleModelsPlan.invalid.length > 0}
-            <p class="text-xs text-text-muted mt-1">
-              {newCompatibleModelsPlan.ids.length} id{newCompatibleModelsPlan.ids.length === 1 ? '' : 's'} to add
-              {#if newCompatibleModelsPlan.duplicates.length > 0}
-                · {newCompatibleModelsPlan.duplicates.length} repeated
-              {/if}
-              {#if newCompatibleModelsPlan.invalid.length > 0}
-                · {newCompatibleModelsPlan.invalid.length} rejected (no slash, pipe or quotes in an id)
-              {/if}
-            </p>
-          {/if}
+      <!-- One action panel instead of a wrapped button row plus two loose
+           paragraphs. The buttons used to reflow onto three lines at narrow
+           widths, and the two notes below them read as prose about the page
+           rather than as the cost of the two destructive buttons they sit
+           under — they are now the buttons' own tooltips. -->
+      <div class="flex flex-col gap-2 rounded-lg border border-border-subtle bg-surface-2/40 p-2.5">
+        <div class="flex flex-wrap items-end gap-2">
+          <div class="min-w-[200px] flex-1">
+            <label for="new-compatible-model-input" class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-text-muted/70">Model ID</label>
+            <input
+              id="new-compatible-model-input"
+              type="text"
+              bind:value={newCompatibleModel}
+              onkeydown={(e) => { if (e.key === 'Enter') handleAddCompatibleModel() }}
+              placeholder={isAnthropicCompatibleNode ? 'claude-3-opus-20240229' : 'gpt-4o — paste a list for several'}
+              class="w-full rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-text-main placeholder:text-text-muted focus:outline-none focus:border-primary"
+            />
+            {#if newCompatibleModelsPlan.ids.length > 1 || newCompatibleModelsPlan.invalid.length > 0}
+              <p class="mt-1 text-xs text-text-muted">
+                {newCompatibleModelsPlan.ids.length} id{newCompatibleModelsPlan.ids.length === 1 ? '' : 's'} to add
+                {#if newCompatibleModelsPlan.duplicates.length > 0}
+                  · {newCompatibleModelsPlan.duplicates.length} repeated
+                {/if}
+                {#if newCompatibleModelsPlan.invalid.length > 0}
+                  · {newCompatibleModelsPlan.invalid.length} rejected (no slash, pipe or quotes in an id)
+                {/if}
+              </p>
+            {/if}
+          </div>
+          <button
+            type="button"
+            onclick={handleAddCompatibleModel}
+            disabled={!newCompatibleModel.trim() || isAddingCompatibleModel}
+            class="inline-flex h-8 items-center justify-center gap-1.5 rounded-[8px] bg-brand-500 px-3 text-xs font-semibold text-white shadow-sm transition-all duration-150 ease-out hover:bg-brand-600 active:scale-[0.97] disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+          >
+            <span class="material-symbols-outlined text-[16px]">add</span>
+            {isAddingCompatibleModel ? 'Adding...' : 'Add'}
+          </button>
+          <button
+            type="button"
+            onclick={() => handleImportCompatibleModels(false)}
+            disabled={!canImportCompatible || isImportingCompatibleModels}
+            title="Fetch this endpoint's /models and add everything it lists"
+            class="inline-flex h-8 items-center justify-center gap-1.5 rounded-[8px] border border-border bg-surface-2 px-3 text-xs font-medium text-text-main transition-colors hover:bg-surface-3 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+          >
+            <span class="material-symbols-outlined text-[16px]">download</span>
+            {isImportingCompatibleModels ? 'Importing...' : 'Import from /models'}
+          </button>
+          <button
+            type="button"
+            onclick={() => handleImportCompatibleModels(true)}
+            disabled={!canImportCompatible || isImportingCompatibleModels}
+            title="Same as import, but skip anything that is not on the provider's free tier"
+            class="inline-flex h-8 items-center justify-center gap-1.5 rounded-[8px] border border-border bg-surface-2 px-3 text-xs font-medium text-text-main transition-colors hover:bg-surface-3 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+          >
+            <span class="material-symbols-outlined text-[16px]">savings</span>
+            Import free only
+          </button>
+          <button
+            type="button"
+            onclick={handleTestAllCompatibleModels}
+            disabled={compatibleRows.length === 0 || compatibleTestAllRunning}
+            title="Test all sends a real completion per model and consumes account quota"
+            class="inline-flex h-8 items-center justify-center gap-1.5 rounded-[8px] border border-border bg-surface-2 px-3 text-xs font-medium text-text-main transition-colors hover:bg-surface-3 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+          >
+            <span class="material-symbols-outlined text-[16px]">{compatibleTestAllRunning ? 'progress_activity' : 'science'}</span>
+            {compatibleTestAllRunning ? `Testing ${compatibleTestSummary.total}/${compatibleRows.length}...` : 'Test all models'}
+          </button>
+          <button
+            type="button"
+            onclick={handleRemoveAllCompatibleModels}
+            disabled={compatibleRows.length === 0 || isRemovingCompatibleModels || compatibleTestAllRunning}
+            title="Remove all deletes this node's imported models and the aliases pointing at them; models that ship with the build stay"
+            class="inline-flex h-8 items-center justify-center gap-1.5 rounded-[8px] border border-border bg-surface-2 px-3 text-xs font-medium text-text-main transition-colors hover:border-red-500/40 hover:bg-red-500/10 hover:text-red-500 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+          >
+            <span class="material-symbols-outlined text-[16px]">{isRemovingCompatibleModels ? 'progress_activity' : 'delete_sweep'}</span>
+            {isRemovingCompatibleModels ? 'Removing...' : 'Remove all models'}
+          </button>
         </div>
-        <button
-          type="button"
-          onclick={handleAddCompatibleModel}
-          disabled={!newCompatibleModel.trim() || isAddingCompatibleModel}
-          class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-brand-500 hover:bg-brand-600 text-white shadow-sm h-8 px-4 text-xs rounded-[8px] disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          <span class="material-symbols-outlined text-[18px]">add</span>
-          {isAddingCompatibleModel ? 'Adding...' : 'Add'}
-        </button>
-        <button
-          type="button"
-          onclick={() => handleImportCompatibleModels(false)}
-          disabled={!canImportCompatible || isImportingCompatibleModels}
-          class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-surface-2 hover:bg-surface-3 text-text-main border border-border h-8 px-4 text-xs rounded-[8px] disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          <span class="material-symbols-outlined text-[18px]">download</span>
-          {isImportingCompatibleModels ? 'Importing...' : 'Import from /models'}
-        </button>
-        <button
-          type="button"
-          onclick={() => handleImportCompatibleModels(true)}
-          disabled={!canImportCompatible || isImportingCompatibleModels}
-          class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-surface-2 hover:bg-surface-3 text-text-main border border-border h-8 px-4 text-xs rounded-[8px] disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          <span class="material-symbols-outlined text-[18px]">savings</span>
-          Import free only
-        </button>
-        <button
-          type="button"
-          onclick={handleTestAllCompatibleModels}
-          disabled={compatibleRows.length === 0 || compatibleTestAllRunning}
-          class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-surface-2 hover:bg-surface-3 text-text-main border border-border h-8 px-4 text-xs rounded-[8px] disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          <span class="material-symbols-outlined text-[18px]">{compatibleTestAllRunning ? 'progress_activity' : 'science'}</span>
-          {compatibleTestAllRunning ? `Testing ${compatibleTestSummary.total}/${compatibleRows.length}...` : 'Test all models'}
-        </button>
-        <button
-          type="button"
-          onclick={handleRemoveAllCompatibleModels}
-          disabled={compatibleRows.length === 0 || isRemovingCompatibleModels || compatibleTestAllRunning}
-          title="Delete every model imported into this node, in one request"
-          class="inline-flex items-center justify-center gap-2 font-semibold transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] bg-surface-2 hover:bg-red-500/10 text-text-main hover:text-red-500 border border-border h-8 px-4 text-xs rounded-[8px] disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          <span class="material-symbols-outlined text-[18px]">{isRemovingCompatibleModels ? 'progress_activity' : 'delete_sweep'}</span>
-          {isRemovingCompatibleModels ? 'Removing...' : 'Remove all models'}
-        </button>
+        {#if !canImportCompatible}
+          <p class="text-xs text-text-muted">Add a connection to enable importing models.</p>
+        {/if}
       </div>
-      <p class="text-xs text-text-muted">Test all sends a real completion per model and consumes account quota.</p>
-      <p class="text-xs text-text-muted">Remove all deletes this node's imported models and the aliases pointing at them; models that ship with the build stay.</p>
-      {#if !canImportCompatible}
-        <p class="text-xs text-text-muted">Add a connection to enable importing models.</p>
-      {/if}
       <!-- Toolbar: search / filter / batch selection over the rows below.
            Same bordered panel as the registered branch, so the two lists
            read as the same control surface rather than two inventions. -->
