@@ -403,6 +403,7 @@ func (r *Repo) ListJailbreakModelConfigs() (map[string]JailbreakModelConfig, err
 		jailbreakScope, jailbreakDocPrefix+"%", jailbreakDocKey,
 	)
 	if pErr == nil {
+		defer func() { _ = pRows.Close() }()
 		for pRows.Next() {
 			var pk string
 			if pRows.Scan(&pk) == nil {
@@ -413,7 +414,6 @@ func (r *Repo) ListJailbreakModelConfigs() (map[string]JailbreakModelConfig, err
 				}
 			}
 		}
-		_ = pRows.Close()
 	}
 
 	rows, err := r.db.Query(

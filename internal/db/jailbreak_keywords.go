@@ -338,10 +338,10 @@ func (r *Repo) buildJailbreakRuleset() (*jailbreakRuleset, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list jailbreak presets: %w", err)
 	}
+	defer func() { _ = pRows.Close() }()
 	for pRows.Next() {
 		var k, raw string
 		if err := pRows.Scan(&k, &raw); err != nil {
-			_ = pRows.Close()
 			return nil, fmt.Errorf("scan jailbreak preset: %w", err)
 		}
 		doc := parseJailbreakPresetRow(k, raw)
@@ -351,10 +351,8 @@ func (r *Repo) buildJailbreakRuleset() (*jailbreakRuleset, error) {
 		rs.presets[doc.ID] = doc
 	}
 	if err := pRows.Err(); err != nil {
-		_ = pRows.Close()
 		return nil, fmt.Errorf("list jailbreak presets: %w", err)
 	}
-	pRows.Close()
 
 	mRows, err := r.db.Query(
 		`SELECT key, value FROM kv WHERE scope = ? AND key LIKE ?`,
