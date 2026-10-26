@@ -4,6 +4,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strconv"
+	"time"
 	"strings"
 )
 
@@ -32,8 +35,16 @@ type JailbreakDoc struct {
 	// Excludes are the same rules read as a deny list: a model id matching one
 	// of them is never injected with this preset, even when a keyword above
 	// matches it. A global exclude list (see GetJailbreakExcludes) overrides
-	// every preset, including exact bindings.
 	Excludes []JailbreakKeyword `json:"excludes,omitempty"`
+	// Order is the operator's arrangement position in the preset list. Zero
+	// means "unsorted" and falls back to id order, so a preset written by an
+	// older build (or by import) keeps its place without a migration.
+	Order int `json:"order,omitempty"`
+	// CreatedAt / UpdatedAt are RFC3339 UTC stamps the store fills on write.
+	// They let the dashboard sort by newest or recently-touched, which is how
+	// an operator finds the preset they just edited in a long library.
+	CreatedAt string `json:"createdAt,omitempty"`
+	UpdatedAt string `json:"updatedAt,omitempty"`
 }
 
 // JailbreakModelConfig holds the binding between a model and a preset.
@@ -119,6 +130,18 @@ func (r *Repo) SaveJailbreakPreset(d *JailbreakDoc) error {
 	if d == nil {
 		return fmt.Errorf("nil jailbreak doc")
 	}
+	// Timestamps are store-owned: a caller that sends none gets "now", and an
+	// existing preset keeps its original CreatedAt so "newest" stays truthful.
+	now := time.Now().UTC().Format(time.RFC3339)
+	if d.CreatedAt == "" {
+		existing, err := r.getJailbreakDocByKey(jailbreakDocKey)
+		if err == nil && existing != nil && existing.CreatedAt != "" {
+			d.CreatedAt = existing.CreatedAt
+		} else {
+			d.CreatedAt = now
+		}
+	}
+	d.UpdatedAt = now
 	id := d.ID
 	if id == "" {
 		id = "default"
@@ -238,6 +261,22 @@ func (r *Repo) ListJailbreakPresets() ([]*JailbreakDoc, error) {
 		}
 		presets = append(presets, d)
 	}
+	// The operator's arrangement wins; a preset with no stored order (zero)
+	// sorts after every arranged one and falls back to id order, so an import
+	// or an older build keeps a stable place without a migration.
+	sort.SliceStable(presets, func(i, j int) bool {
+		oi, oj := presets[i].Order, presets[j].Order
+		if oi != oj {
+			if oi == 0 {
+				return false
+			}
+			if oj == 0 {
+				return true
+			}
+			return oi < oj
+		}
+		return presets[i].ID < presets[j].ID
+	})
 	return presets, rows.Err()
 }
 
@@ -311,16 +350,18 @@ func (r *Repo) SetJailbreakModel(modelID string, enabled bool) error {
 
 // SetJailbreakModelPreset binds a preset to a model.
 func (r *Repo) SetJailbreakModelPreset(modelID string, presetID string, enabled bool) error {
-	if !enabled || presetID == "" || presetID == "off" {
-		_, err := r.db.Exec(`DELETE FROM kv WHERE scope = ? AND key = ?`,
-			jailbreakScope, jailbreakModelPrefix+modelID)
-		if err == nil {
-			r.invalidateJailbreakRuleset()
-		}
-		return err
+	if modelID == "" {
+		return fmt.Errorf("empty model id")
+	}
+	// "off" (or an empty preset with enabled=false) is a stored state, not a
+	// delete: the row stays listed with its toggle off, and only the explicit
+	// delete path removes it. A binding that was never armed and is now turned
+	// off is still written, so the list shows what the operator touched.
+	if presetID == "" || presetID == "off" || presetID == "none" {
+		presetID = ""
 	}
 	cfg := JailbreakModelConfig{
-		Enabled:  true,
+		Enabled:  enabled,
 		PresetID: presetID,
 	}
 	raw, err := json.Marshal(cfg)
@@ -332,7 +373,9 @@ func (r *Repo) SetJailbreakModelPreset(modelID string, presetID string, enabled 
 		 ON CONFLICT(scope, key) DO UPDATE SET value = excluded.value`,
 		jailbreakScope, jailbreakModelPrefix+modelID, string(raw),
 	)
-	r.invalidateJailbreakRuleset()
+	if err == nil {
+		r.invalidateJailbreakRuleset()
+	}
 	return err
 }
 
@@ -400,8 +443,11 @@ func (r *Repo) ListJailbreakModelConfigs() (map[string]JailbreakModelConfig, err
 				orphaned = append(orphaned, k)
 				continue
 			}
-			out[k[len(jailbreakModelPrefix):]] = cfg
 		}
+		// A binding is listed whether it is on or off: turning one off is a
+		// temporary state the operator toggles back, so it must stay visible.
+		// Only the delete button removes a row.
+		out[k[len(jailbreakModelPrefix):]] = cfg
 	}
 	for _, k := range orphaned {
 		_, _ = r.db.Exec(`DELETE FROM kv WHERE scope = ? AND key = ?`, jailbreakScope, k)
@@ -418,4 +464,104 @@ func (r *Repo) ListJailbreakModelConfigs() (map[string]JailbreakModelConfig, err
 // ResolveJailbreakDoc, which takes every candidate id.
 func (r *Repo) GetJailbreakDocForModel(modelID string) (*JailbreakDoc, error) {
 	return r.ResolveJailbreakDoc(modelID)
+}
+
+// jailbreakUsagePrefix marks the per-preset injection counters. The key is
+// "usage:<preset id>", the value a JSON int. A counter is written on the
+// request path (one UPDATE per injected request) and read by the dashboard's
+// preset list, so an operator can see which presets actually earn their keep.
+const jailbreakUsagePrefix = "usage:"
+
+// RecordJailbreakUsage bumps the injection counter for one preset. It is
+// best-effort: a failed write must never fail the request that was already
+// injected, so the error is swallowed by the caller's log line.
+func (r *Repo) RecordJailbreakUsage(presetID string) error {
+	if presetID == "" {
+		return nil
+	}
+	key := jailbreakUsagePrefix + presetID
+	var n int64
+	row := r.db.QueryRow(`SELECT value FROM kv WHERE scope = ? AND key = ? LIMIT 1`, jailbreakScope, key)
+	var raw string
+	if err := row.Scan(&raw); err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if raw != "" {
+		_, _ = fmt.Sscanf(strings.TrimSpace(raw), "%d", &n)
+	}
+	n++
+	val := strconv.FormatInt(n, 10)
+	_, err := r.db.Exec(
+		`INSERT INTO kv (scope, key, value) VALUES (?, ?, ?)
+		 ON CONFLICT(scope, key) DO UPDATE SET value = excluded.value`,
+		jailbreakScope, key, val,
+	)
+	return err
+}
+
+// JailbreakUsage returns the injection counter for every preset that has one,
+// keyed by preset id. A preset with no counter is absent rather than zero, so
+// the dashboard can tell "never used" from "counter cleared".
+func (r *Repo) JailbreakUsage() (map[string]int64, error) {
+	rows, err := r.db.Query(
+		`SELECT key, value FROM kv WHERE scope = ? AND key LIKE ?`,
+		jailbreakScope, jailbreakUsagePrefix+"%",
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]int64)
+	for rows.Next() {
+		var key, raw string
+		if err := rows.Scan(&key, &raw); err != nil {
+			return nil, err
+		}
+		id := strings.TrimPrefix(key, jailbreakUsagePrefix)
+		n, _ := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+		out[id] = n
+	}
+	return out, rows.Err()
+}
+
+// ReorderJailbreakPresets stores the operator's arrangement. order is the full
+// preset id list in display order; a preset absent from it keeps its stored
+// position, so a partial payload never resets the rest of the library.
+func (r *Repo) ReorderJailbreakPresets(order []string) error {
+	for i, id := range order {
+		if id == "" {
+			continue
+		}
+		key := jailbreakDocPrefix + id
+		if id == jailbreakDocKey {
+			key = jailbreakDocKey
+		}
+		doc, err := r.getJailbreakDocByKey(key)
+		if err != nil {
+			return err
+		}
+		if doc == nil {
+			continue // an id that no longer exists is skipped, not an error
+		}
+		doc.Order = i + 1
+		if err := r.SaveJailbreakPreset(doc); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DeleteJailbreakModel removes one binding outright. Turning a binding off is a
+// stored state the operator toggles back; this is the only path that drops the
+// row, which is what the dashboard's delete button calls.
+func (r *Repo) DeleteJailbreakModel(modelID string) error {
+	if modelID == "" {
+		return fmt.Errorf("empty model id")
+	}
+	_, err := r.db.Exec(`DELETE FROM kv WHERE scope = ? AND key = ?`,
+		jailbreakScope, jailbreakModelPrefix+modelID)
+	if err == nil {
+		r.invalidateJailbreakRuleset()
+	}
+	return err
 }

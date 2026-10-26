@@ -187,3 +187,47 @@ func TestJailbreakPresetsAndModelBinding(t *testing.T) {
 		t.Fatalf("modelA should remain armed to coder, got: %+v", cfgsAfter[modelA])
 	}
 }
+
+// TestJailbreakModelOffStaysListed pins that turning a binding off is a stored
+// state, not a delete: the row stays in the list with its toggle off, and only
+// DeleteJailbreakModel removes it. The dashboard's delete button is the only
+// path that drops a row.
+func TestJailbreakModelOffStaysListed(t *testing.T) {
+	database, cleanup := setupTestDB(t)
+	defer cleanup()
+	repo := NewRepo(database)
+
+	if err := repo.SetJailbreakModelPreset("providerx/deepseek-4-pro", "deepseek", true); err != nil {
+		t.Fatalf("arm: %v", err)
+	}
+	// Turn it off — the row must survive.
+	if err := repo.SetJailbreakModelPreset("providerx/deepseek-4-pro", "deepseek", false); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	cfgs, err := repo.ListJailbreakModelConfigs()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	cfg, ok := cfgs["providerx/deepseek-4-pro"]
+	if !ok {
+		t.Fatalf("binding vanished after being turned off; list = %+v", cfgs)
+	}
+	if cfg.Enabled {
+		t.Errorf("enabled = true, want false")
+	}
+	if cfg.PresetID != "deepseek" {
+		t.Errorf("presetId = %q, want deepseek (the row keeps what it was bound to)", cfg.PresetID)
+	}
+
+	// Explicit delete is the only path that drops the row.
+	if err := repo.DeleteJailbreakModel("providerx/deepseek-4-pro"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	cfgs, err = repo.ListJailbreakModelConfigs()
+	if err != nil {
+		t.Fatalf("list after delete: %v", err)
+	}
+	if _, ok := cfgs["providerx/deepseek-4-pro"]; ok {
+		t.Errorf("binding still listed after delete")
+	}
+}

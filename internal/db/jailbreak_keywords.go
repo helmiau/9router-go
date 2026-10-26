@@ -472,3 +472,122 @@ func (r *Repo) SaveJailbreakExcludes(rules []JailbreakKeyword) error {
 	r.invalidateJailbreakRuleset()
 	return nil
 }
+
+// JailbreakMatch explains which rule decided one model id, so the dashboard
+// can answer "why did (or didn't) this id get injected?" without an operator
+// having to reason about the precedence chain by hand.
+type JailbreakMatch struct {
+	// Injected is the final verdict: true when a prompt is prepended.
+	Injected bool `json:"injected"`
+	// Reason names the winning rule: "global-exclude", "exact-binding",
+	// "keyword", "preset-exclude", or "no-match".
+	Reason string `json:"reason"`
+	// PresetID and PresetName identify the winning preset, when there is one.
+	PresetID   string `json:"presetId,omitempty"`
+	PresetName string `json:"presetName,omitempty"`
+	// Keyword is the winning rule text, for a keyword match.
+	Keyword string `json:"keyword,omitempty"`
+	// MatchedID is the candidate id the winning rule matched.
+	MatchedID string `json:"matchedId,omitempty"`
+	// Detail is a human sentence for the dashboard.
+	Detail string `json:"detail,omitempty"`
+}
+
+// ExplainJailbreakDoc resolves ids the same way ResolveJailbreakDoc does, and
+// reports which rule won. It exists for the dashboard's test-match field: the
+// resolution itself is unchanged, only the reason is surfaced.
+func (r *Repo) ExplainJailbreakDoc(ids ...string) (*JailbreakMatch, error) {
+	rs := r.jailbreakRuleset()
+	if rs.excluded("", ids) {
+		return &JailbreakMatch{
+			Injected: false,
+			Reason:   "global-exclude",
+			Detail:   "A global exclude rule matches this id, so no preset is ever injected.",
+		}, nil
+	}
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		cfg, ok := rs.exact[id]
+		if !ok || !cfg.Enabled {
+			continue
+		}
+		presetID := cfg.PresetID
+		if presetID == "" {
+			presetID = jailbreakDocKey
+		}
+		doc, ok := rs.presets[presetID]
+		if !ok {
+			continue // orphan binding: the preset is gone, keep looking
+		}
+		if rs.excluded(presetID, ids) {
+			return &JailbreakMatch{
+				Injected:  false,
+				Reason:    "preset-exclude",
+				PresetID:  presetID,
+				MatchedID: id,
+				Detail:    "An exact binding matched, but that preset's own exclude list denies this id.",
+			}, nil
+		}
+		return &JailbreakMatch{
+			Injected:   true,
+			Reason:     "exact-binding",
+			PresetID:   presetID,
+			PresetName: doc.Name,
+			MatchedID:  id,
+			Detail:     "An exact binding on this id wins over every keyword rule.",
+		}, nil
+	}
+	best := -1
+	bestID := ""
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		for i := range rs.rules {
+			if !rs.rules[i].matches(id) {
+				continue
+			}
+			if best < 0 || len(rs.rules[i].text) > len(rs.rules[best].text) {
+				best = i
+				bestID = id
+			}
+		}
+		if best >= 0 {
+			break // an earlier id outranks a later one
+		}
+	}
+	if best < 0 {
+		return &JailbreakMatch{
+			Injected: false,
+			Reason:   "no-match",
+			Detail:   "No preset keyword or exact binding covers this id.",
+		}, nil
+	}
+	presetID := rs.rules[best].presetID
+	if rs.excluded(presetID, ids) {
+		return &JailbreakMatch{
+			Injected:  false,
+			Reason:    "preset-exclude",
+			PresetID:  presetID,
+			Keyword:   rs.rules[best].text,
+			MatchedID: bestID,
+			Detail:    "A keyword matched, but that preset's own exclude list denies this id.",
+		}, nil
+	}
+	doc := rs.presets[presetID]
+	name := ""
+	if doc != nil {
+		name = doc.Name
+	}
+	return &JailbreakMatch{
+		Injected:   true,
+		Reason:     "keyword",
+		PresetID:   presetID,
+		PresetName: name,
+		Keyword:    rs.rules[best].text,
+		MatchedID: bestID,
+		Detail:     "A keyword rule matched this id.",
+	}, nil
+}

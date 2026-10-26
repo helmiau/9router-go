@@ -55,7 +55,7 @@ describe('nav model', () => {
   })
 
   it('hides only the defaults, and offers every row to the arrangement', () => {
-    expect(DEFAULT_HIDDEN_NAV_ENTRIES.map((entry) => entry.id)).toEqual(['plans'])
+    expect(DEFAULT_HIDDEN_NAV_ENTRIES.map((entry) => entry.id)).toEqual(['plans', 'jailbreak'])
     for (const entry of DEFAULT_HIDDEN_NAV_ENTRIES) {
       expect(NAV_ORDER).toContain(entry.id)
       expect(ALWAYS_VISIBLE_NAV_IDS).not.toContain(entry.id)
@@ -74,8 +74,8 @@ describe('nav model', () => {
 })
 
 describe('default visibility', () => {
-  it('hides Plans, and only Plans, until a list is saved', () => {
-    expect([...DEFAULT_HIDDEN_NAV_IDS]).toEqual(['plans'])
+  it('hides Plans and Jailbreak until a list is saved', () => {
+    expect([...DEFAULT_HIDDEN_NAV_IDS]).toEqual(['plans', 'jailbreak'])
     for (const saved of [undefined, null, {}, 'plans', { hidden: 'plans' }]) {
       const ids = renderedIds(saved)
       expect(ids, JSON.stringify(saved)).not.toContain('plans')
@@ -149,8 +149,8 @@ describe('stored hide list', () => {
   })
 
   it('starts from the defaults when nothing was saved', () => {
-    expect(setNavVisible(undefined, 'plans', true)).toEqual([])
-    expect(setNavVisible(undefined, 'quota', false)).toEqual(['quota', 'plans'])
+    expect(setNavVisible(undefined, 'plans', true)).toEqual(['jailbreak'])
+    expect(setNavVisible(undefined, 'quota', false)).toEqual(['quota', 'jailbreak', 'plans'])
   })
 
   it('survives a junk payload without losing a valid entry', () => {
@@ -293,7 +293,7 @@ describe('sidebar presets', () => {
   })
 
   it('starts from the build default and grows to everything', () => {
-    expect(navPresetHidden('default')).toEqual([...DEFAULT_HIDDEN_NAV_IDS])
+    expect(navPresetHidden('default').slice().sort()).toEqual([...DEFAULT_HIDDEN_NAV_IDS].sort())
     expect(navPresetHidden('advanced')).toEqual([])
     // Each step reveals more than the one before it.
     expect(navPresetHidden('simple').length).toBeGreaterThan(navPresetHidden('default').length)
@@ -303,8 +303,8 @@ describe('sidebar presets', () => {
       'connections',
       'combos',
       'analytics',
-      'settings',
       'security',
+      'settings',
     ])
   })
 

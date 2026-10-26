@@ -292,7 +292,7 @@
       description: 'Encrypt provider credentials at rest, and scan prompts for personal data and injection attempts before they leave the gateway',
     },
     plans: { title: 'Plans', description: 'Per-key quota plans and policy resolution' },
-    jailbreak: { title: 'Jailbreak', description: 'Per-model system-prompt injection and Gemini safety bypass' },
+    jailbreak: { title: 'Persona', description: 'Per-model system-prompt injection and Gemini safety bypass' },
   }
 
   function handleOpenNewCombo() {

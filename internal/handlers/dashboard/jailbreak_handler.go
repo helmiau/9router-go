@@ -8,6 +8,10 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"sort"
+
+	"9router/proxy/internal/handlers/chat"
+	
 
 	"github.com/go-chi/chi/v5"
 
@@ -239,4 +243,261 @@ func slugify(s string) string {
 		return fmt.Sprintf("preset-%d", time.Now().UnixNano())
 	}
 	return res
+}
+
+// HandleExplainJailbreak answers "which preset wins for this model id, and
+// why?" — POST /api/jailbreak/resolve with {"id":"providerx/deepseek-4-pro"}.
+// It is the read-only twin of the injection path: the same resolver runs, and
+// the winning rule is reported so an operator can verify a keyword or an
+// exclude without sending a real request.
+func (h *DashboardHandler) HandleExplainJailbreak(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 4*1024))
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	id := strings.TrimSpace(req.ID)
+	if id == "" || len(id) > 300 {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "invalid model id")
+		return
+	}
+	match, err := h.Repo.ExplainJailbreakDoc(id)
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	handlerutil.WriteJSON(w, http.StatusOK, match)
+}
+
+// HandleDuplicateJailbreakPreset clones a preset under a new id, keeping its
+// prompt, kind, safety switch and both rule lists. POST
+// /api/jailbreak/presets/{id}/duplicate with an optional {"id":"new-id"}; when
+// no id is given the clone is named "<id>-copy", then "-copy-2" and so on until
+// the name is free.
+func (h *DashboardHandler) HandleDuplicateJailbreakPreset(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "missing preset id")
+		return
+	}
+	src, err := h.Repo.GetJailbreakPreset(id)
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if src == nil {
+		handlerutil.WriteJSONError(w, http.StatusNotFound, "preset not found")
+		return
+	}
+	body, _ := io.ReadAll(io.LimitReader(r.Body, 4*1024))
+	var req struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(body, &req)
+
+	newID := strings.TrimSpace(req.ID)
+	if newID == "" {
+		base := src.ID
+		if base == "" {
+			base = slugify(src.Name)
+		}
+		newID = base + "-copy"
+		for n := 2; ; n++ {
+			existing, err := h.Repo.GetJailbreakPreset(newID)
+			if err != nil {
+				handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			// An absent preset comes back as an empty doc, not nil, so the
+			// "is this id free?" test is an empty prompt rather than a nil
+			// pointer — checking for nil looped forever.
+			if existing == nil || existing.Prompt == "" {
+				break
+			}
+			newID = fmt.Sprintf("%s-copy-%d", base, n)
+		}
+	}
+	if newID == src.ID {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "duplicate id must differ from the source")
+		return
+	}
+	clone := &db.JailbreakDoc{
+		ID:            newID,
+		Name:          src.Name + " (copy)",
+		Prompt:        src.Prompt,
+		Kind:          src.Kind,
+		GeminiSafety:  src.GeminiSafety,
+		Source:        src.Source,
+		Keywords:      src.Keywords,
+		Excludes:      src.Excludes,
+	}
+	if err := h.Repo.SaveJailbreakPreset(clone); err != nil {
+		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "preset": clone})
+}
+
+// HandleJailbreakUsage serves the per-preset injection counters, so the preset
+// list can show which presets actually earn their keep. GET
+// /api/jailbreak/usage → {"usage":{"<preset id>":<count>}}.
+func (h *DashboardHandler) HandleJailbreakUsage(w http.ResponseWriter, r *http.Request) {
+	usage, err := h.Repo.JailbreakUsage()
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{"usage": usage})
+}
+
+// HandlePreviewJailbreak shows the exact outbound body one request would carry:
+// the preset's prompt prepended as the first system message, the original
+// messages intact after it. POST /api/jailbreak/preview with
+// {"id":"providerx/deepseek-4-pro","messages":[…]}.
+//
+// It is a pure function of the resolver plus the supplied messages — nothing is
+// forwarded, no upstream is contacted, and the request body is bounded like
+// every other jailbreak write.
+func (h *DashboardHandler) HandlePreviewJailbreak(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxJailbreakBodyBytes))
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var req struct {
+		ID       string           `json:"id"`
+		Messages []map[string]any `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	id := strings.TrimSpace(req.ID)
+	if id == "" || len(id) > 300 {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "invalid model id")
+		return
+	}
+	match, err := h.Repo.ExplainJailbreakDoc(id)
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// The preview carries the caller's own messages, so an empty list is a
+	// caller mistake rather than a reason to invent content.
+	msgs := make([]map[string]any, 0, len(req.Messages)+1)
+	for _, m := range req.Messages {
+		msgs = append(msgs, m)
+	}
+	out := map[string]any{
+		"injected": match.Injected,
+		"reason":   match.Reason,
+		"messages": msgs,
+	}
+	if match.Injected && match.PresetID != "" {
+		doc, err := h.Repo.GetJailbreakPreset(match.PresetID)
+		if err != nil {
+			handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if doc != nil && doc.Prompt != "" {
+			out["presetId"] = doc.ID
+			out["presetName"] = doc.Name
+			out["prompt"] = doc.Prompt
+			out["messages"] = append([]map[string]any{
+				{"role": "system", "content": doc.Prompt},
+			}, msgs...)
+		}
+	}
+	handlerutil.WriteJSON(w, http.StatusOK, out)
+}
+
+// HandleReorderJailbreakPresets stores the operator's arrangement. PUT
+// /api/jailbreak/presets/order with {"order":["deepseek","soul","agents"]} —
+// the array is the full list in the order the dashboard shows it, so a preset
+// missing from the array keeps its stored position rather than being reset.
+func (h *DashboardHandler) HandleReorderJailbreakPresets(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 16*1024))
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var req struct {
+		Order []string `json:"order"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(req.Order) == 0 {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "missing order")
+		return
+	}
+	if len(req.Order) > 200 {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "too many presets")
+		return
+	}
+	if err := h.Repo.ReorderJailbreakPresets(req.Order); err != nil {
+		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// HandleJailbreakModelCatalog serves every model id the gateway can route, for
+// the dashboard's bulk-arm picker. GET /api/jailbreak/models/catalog.
+//
+// It lives in the dashboard group rather than reusing GET /api/models, which
+// sits in the API-key group: a dashboard session is not an engine key, so the
+// engine route answers 401 to the SPA. The catalog is the same list the engine
+// route builds, minus the per-key access filter — an operator holding a
+// dashboard session already sees every connection.
+func (h *DashboardHandler) HandleJailbreakModelCatalog(w http.ResponseWriter, r *http.Request) {
+	chatH := chat.NewChatHandler(h.Repo, nil)
+	result := chatH.BuildModelsListResult(r.Context(), chat.ListModeCatalog)
+	ids := make([]string, 0, len(result.Models))
+	for _, m := range result.Models {
+		if m.ID == "" {
+			continue
+		}
+		ids = append(ids, m.ID)
+	}
+	sort.Strings(ids)
+	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{"models": ids})
+}
+
+// HandleDeleteJailbreakModel removes one binding outright.
+// DELETE /api/jailbreak/models with {"id":"providerx/deepseek-4-pro"}.
+//
+// The id travels in the body rather than the path for the same reason
+// HandleSetJailbreakModel does it: model ids contain "/" and ":", and a chi
+// path parameter hands those back still-encoded.
+func (h *DashboardHandler) HandleDeleteJailbreakModel(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 4*1024))
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if strings.TrimSpace(req.ID) == "" || len(req.ID) > 300 {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest, "invalid model id")
+		return
+	}
+	if err := h.Repo.DeleteJailbreakModel(req.ID); err != nil {
+		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "id": req.ID})
 }

@@ -934,6 +934,12 @@ export interface JailbreakDoc {
   keywords?: JailbreakKeyword[]
   /** Models matching one of these rules never get this preset. */
   excludes?: JailbreakKeyword[]
+  /** Operator arrangement position in the preset list. */
+  order?: number
+  /** RFC3339 UTC stamp the store filled on first write. */
+  createdAt?: string
+  /** RFC3339 UTC stamp of the last write. */
+  updatedAt?: string
 }
 
 /**
@@ -978,6 +984,18 @@ export interface JailbreakImportResult {
   source: string
   imported: JailbreakImportEntry[]
   refused: JailbreakImportRefusal[]
+}
+
+/** Why one model id resolved (or did not resolve) to a preset. */
+export interface JailbreakMatch {
+  injected: boolean
+  /** global-exclude | exact-binding | keyword | preset-exclude | no-match */
+  reason: string
+  presetId?: string
+  presetName?: string
+  keyword?: string
+  matchedId?: string
+  detail?: string
 }
 
 export function isAuthenticated(): boolean {
@@ -2301,6 +2319,7 @@ export const api = {
     kind?: string
     keywords?: JailbreakKeyword[]
     excludes?: JailbreakKeyword[]
+    order?: number
   }) =>
     request<{ success: boolean }>('/api/jailbreak/presets', {
       method: 'PUT',
@@ -2315,7 +2334,11 @@ export const api = {
     request<{ success: boolean }>('/api/jailbreak/models', {
       method: 'PUT',
       body: JSON.stringify({ id, presetId, enabled }),
-
+    }),
+  deleteJailbreakModel: (id: string) =>
+    request<{ ok: boolean; id: string }>('/api/jailbreak/models', {
+      method: 'DELETE',
+      body: JSON.stringify({ id }),
     }),
   getJailbreakExcludes: () => request<JailbreakExcludes>('/api/jailbreak/excludes'),
   saveJailbreakExcludes: (excludes: JailbreakKeyword[]) =>
@@ -2336,4 +2359,35 @@ export const api = {
       { method: 'POST', body: form },
     )
   },
+  previewJailbreak: (id: string, messages: { role: string; content: string }[]) =>
+    request<{
+      injected: boolean
+      reason: string
+      presetId?: string
+      presetName?: string
+      prompt?: string
+      messages: { role: string; content: string }[]
+    }>('/api/jailbreak/preview', {
+      method: 'POST',
+      body: JSON.stringify({ id, messages }),
+    }),
+  reorderJailbreakPresets: (order: string[]) =>
+    request<{ ok: boolean }>('/api/jailbreak/presets/order', {
+      method: 'PUT',
+      body: JSON.stringify({ order }),
+    }),
+  getJailbreakModelCatalog: () =>
+    request<{ models: string[] }>('/api/jailbreak/models/catalog'),
+  getJailbreakUsage: () =>
+    request<{ usage: Record<string, number> }>('/api/jailbreak/usage'),
+  explainJailbreak: (id: string) =>
+    request<JailbreakMatch>('/api/jailbreak/resolve', {
+      method: 'POST',
+      body: JSON.stringify({ id }),
+    }),
+  duplicateJailbreakPreset: (id: string, newId?: string) =>
+    request<{ ok: boolean; preset: JailbreakDoc }>(`/api/jailbreak/presets/${encodeURIComponent(id)}/duplicate`, {
+      method: 'POST',
+      body: JSON.stringify({ id: newId || '' }),
+    }),
 }

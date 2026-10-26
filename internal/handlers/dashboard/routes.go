@@ -158,11 +158,18 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		r.Get("/jailbreak/presets", h.HandleListJailbreakPresets)
 		r.Put("/jailbreak/presets", h.HandlePutJailbreakPreset)
 		r.Delete("/jailbreak/presets/{id}", h.HandleDeleteJailbreakPreset)
+		r.Post("/jailbreak/presets/{id}/duplicate", h.HandleDuplicateJailbreakPreset)
 		r.Get("/jailbreak/models", h.HandleListJailbreakModels)
+		r.Get("/jailbreak/models/catalog", h.HandleJailbreakModelCatalog)
 		r.Put("/jailbreak/models", h.HandleSetJailbreakModel)
+		r.Delete("/jailbreak/models", h.HandleDeleteJailbreakModel)
 		r.Get("/jailbreak/excludes", h.HandleGetJailbreakExcludes)
 		r.Put("/jailbreak/excludes", h.HandlePutJailbreakExcludes)
 		r.Post("/jailbreak/import", h.HandleImportJailbreak)
+		r.Post("/jailbreak/resolve", h.HandleExplainJailbreak)
+		r.Get("/jailbreak/usage", h.HandleJailbreakUsage)
+		r.Post("/jailbreak/preview", h.HandlePreviewJailbreak)
+		r.Put("/jailbreak/presets/order", h.HandleReorderJailbreakPresets)
 		r.Post("/jailbreak/presets/upload", h.HandleUploadJailbreakPreset)
 
 		// Models

@@ -177,9 +177,9 @@
       icon: 'terminal',
     },
     jailbreak: {
-      title: 'Jailbreak',
+      title: 'Persona',
       description: 'Per-model system-prompt injection and Gemini safety bypass',
-      icon: 'lock_open',
+      icon: 'masks',
     },
     settings: {
       title: 'Settings',

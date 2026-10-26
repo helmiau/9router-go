@@ -377,3 +377,178 @@ func TestJailbreakGlobalExcludeRoutes(t *testing.T) {
 		t.Errorf("globally excluded id resolved to %+v, want no injection", doc)
 	}
 }
+
+// TestJailbreakResolveRoute pins the test-match endpoint to the table the
+// dashboard tests exercise. The production table is covered by
+// TestSetupServerRouter_JailbreakRoutesAreLive.
+func TestJailbreakResolveRoute(t *testing.T) {
+	repo, cleanup := setupTestDB(t)
+	defer cleanup()
+	r := setupTestRouter(repo)
+
+	// Arm a preset by keyword.
+	payload, _ := json.Marshal(map[string]any{
+		"id":       "deepseek",
+		"name":     "Deepseek",
+		"prompt":   "DS RULE",
+		"keywords": []map[string]any{{"text": "deepseek"}},
+	})
+	req := httptest.NewRequest(http.MethodPut, "/api/jailbreak/presets", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("seed preset status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+
+	// A matching id reports the keyword rule.
+	body, _ := json.Marshal(map[string]any{"id": "providerx/deepseek-4-pro"})
+	req = httptest.NewRequest(http.MethodPost, "/api/jailbreak/resolve", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("resolve status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var match map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &match); err != nil {
+		t.Fatalf("decode resolve: %v", err)
+	}
+	if match["injected"] != true {
+		t.Errorf("injected = %v, want true", match["injected"])
+	}
+	if match["reason"] != "keyword" {
+		t.Errorf("reason = %v, want keyword", match["reason"])
+	}
+	if match["presetId"] != "deepseek" {
+		t.Errorf("presetId = %v, want deepseek", match["presetId"])
+	}
+
+	// A non-matching id reports no-match.
+	body, _ = json.Marshal(map[string]any{"id": "gpt-4o"})
+	req = httptest.NewRequest(http.MethodPost, "/api/jailbreak/resolve", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("resolve status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	match = nil
+	if err := json.Unmarshal(rec.Body.Bytes(), &match); err != nil {
+		t.Fatalf("decode resolve: %v", err)
+	}
+	if match["injected"] != false {
+		t.Errorf("injected = %v, want false", match["injected"])
+	}
+	if match["reason"] != "no-match" {
+		t.Errorf("reason = %v, want no-match", match["reason"])
+	}
+}
+
+// TestJailbreakDuplicateAndReorder pins the clone and arrangement endpoints to
+// the table the dashboard tests exercise.
+func TestJailbreakDuplicateAndReorder(t *testing.T) {
+	repo, cleanup := setupTestDB(t)
+	defer cleanup()
+	r := setupTestRouter(repo)
+
+	seed := func(id, name string) {
+		payload, _ := json.Marshal(map[string]any{
+			"id": id, "name": name, "prompt": name + " RULE",
+			"keywords": []map[string]any{{"text": id}},
+		})
+		req := httptest.NewRequest(http.MethodPut, "/api/jailbreak/presets", bytes.NewReader(payload))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("seed %s status = %d, want 200: %s", id, rec.Code, rec.Body.String())
+		}
+	}
+	seed("alpha", "Alpha")
+	seed("beta", "Beta")
+
+	// Duplicate alpha → alpha-copy, keeping its prompt and keyword.
+	req := httptest.NewRequest(http.MethodPost, "/api/jailbreak/presets/alpha/duplicate", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("duplicate status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var dup struct {
+		Ok      bool           `json:"ok"`
+		Preset db.JailbreakDoc `json:"preset"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &dup); err != nil {
+		t.Fatalf("decode duplicate: %v", err)
+	}
+	if dup.Preset.ID != "alpha-copy" {
+		t.Errorf("duplicate id = %q, want alpha-copy", dup.Preset.ID)
+	}
+	if dup.Preset.Prompt != "Alpha RULE" {
+		t.Errorf("duplicate prompt = %q, want the source prompt", dup.Preset.Prompt)
+	}
+	if len(dup.Preset.Keywords) != 1 || dup.Preset.Keywords[0].Text != "alpha" {
+		t.Errorf("duplicate keywords = %+v, want the source keyword", dup.Preset.Keywords)
+	}
+
+	// Reorder: beta first, then alpha-copy, then alpha.
+	order, _ := json.Marshal(map[string]any{"order": []string{"beta", "alpha-copy", "alpha"}})
+	req = httptest.NewRequest(http.MethodPut, "/api/jailbreak/presets/order", bytes.NewReader(order))
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reorder status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+
+	presets, err := repo.ListJailbreakPresets()
+	if err != nil {
+		t.Fatalf("list presets: %v", err)
+	}
+	if len(presets) != 3 {
+		t.Fatalf("preset count = %d, want 3", len(presets))
+	}
+	want := []string{"beta", "alpha-copy", "alpha"}
+	for i, id := range want {
+		if presets[i].ID != id {
+			t.Errorf("preset[%d] = %q, want %q (full order %s)", i, presets[i].ID, id, presetIDs(presets))
+		}
+	}
+}
+
+func presetIDs(list []*db.JailbreakDoc) []string {
+	out := make([]string, 0, len(list))
+	for _, d := range list {
+		out = append(out, d.ID)
+	}
+	return out
+}
+
+// TestJailbreakUsageCounter pins the per-preset injection counter.
+func TestJailbreakUsageCounter(t *testing.T) {
+	repo, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	if err := repo.RecordJailbreakUsage("deepseek"); err != nil {
+		t.Fatalf("record usage: %v", err)
+	}
+	if err := repo.RecordJailbreakUsage("deepseek"); err != nil {
+		t.Fatalf("record usage again: %v", err)
+	}
+	if err := repo.RecordJailbreakUsage("soul"); err != nil {
+		t.Fatalf("record soul usage: %v", err)
+	}
+	usage, err := repo.JailbreakUsage()
+	if err != nil {
+		t.Fatalf("read usage: %v", err)
+	}
+	if usage["deepseek"] != 2 {
+		t.Errorf("deepseek = %d, want 2", usage["deepseek"])
+	}
+	if usage["soul"] != 1 {
+		t.Errorf("soul = %d, want 1", usage["soul"])
+	}
+	if _, ok := usage["never-used"]; ok {
+		t.Errorf("never-used present, want absent")
+	}
+}

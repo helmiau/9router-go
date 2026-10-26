@@ -46,6 +46,11 @@ func (h *ChatHandler) applyJailbreak(ctx context.Context, body map[string]any, r
 	prependSystemPrompt(body, doc.Prompt)
 	log.Info("jailbreak", "applied", "model", requestedModel,
 		"prompt_bytes", len(doc.Prompt), "safety_off", doc.GeminiSafety)
+	// Best-effort usage counter for the dashboard's per-preset hit count. A
+	// failed write must not fail a request that is already being injected.
+	if err := h.Repo.RecordJailbreakUsage(doc.ID); err != nil {
+		log.Warn("jailbreak", "usage counter failed", "preset", doc.ID, "error", err)
+	}
 	if doc.GeminiSafety {
 		ctx = translator.WithGeminiSafety(ctx, true)
 	}

@@ -323,7 +323,7 @@ func TestJailbreakImportFromGithubEndToEnd(t *testing.T) {
 	repo, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	res, err := fg.importer().importPresets(t.Context(), repo, "owner/repo")
+	res, err := fg.importer().importPresets(t.Context(), repo, "owner/repo", "")
 	if err != nil {
 		t.Fatalf("importPresets: %v", err)
 	}
@@ -371,7 +371,7 @@ func TestJailbreakImportFromGithubEndToEnd(t *testing.T) {
 
 	// Re-importing the same collection updates in place rather than
 	// duplicating, so a refresh is safe to run.
-	if _, err := fg.importer().importPresets(t.Context(), repo, "owner/repo"); err != nil {
+	if _, err := fg.importer().importPresets(t.Context(), repo, "owner/repo", ""); err != nil {
 		t.Fatalf("second import: %v", err)
 	}
 	presets, err := repo.ListJailbreakPresets()
@@ -394,7 +394,7 @@ func TestJailbreakImportReportsRefusals(t *testing.T) {
 	repo, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	res, err := fg.importer().importPresets(t.Context(), repo, "owner/repo")
+	res, err := fg.importer().importPresets(t.Context(), repo, "owner/repo", "")
 	if err != nil {
 		t.Fatalf("importPresets: %v", err)
 	}
@@ -450,7 +450,7 @@ func TestJailbreakImportNoCandidates(t *testing.T) {
 	repo, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	if _, err := fg.importer().importPresets(t.Context(), repo, "owner/repo"); err == nil {
+	if _, err := fg.importer().importPresets(t.Context(), repo, "owner/repo", ""); err == nil {
 		t.Fatal("importPresets succeeded on a repository with no prompt files")
 	}
 }
@@ -875,7 +875,7 @@ func TestJailbreakImportFromArbitraryURL(t *testing.T) {
 	// The test server is on loopback, which the guard refuses by default; the
 	// opt-in is what an operator importing from their own network sets.
 	imp.allowPrivate = true
-	res, err := imp.importPresets(t.Context(), repo, srv.URL+"/prompts/SOUL.md")
+	res, err := imp.importPresets(t.Context(), repo, srv.URL+"/prompts/SOUL.md", "")
 	if err != nil {
 		t.Fatalf("importPresets: %v", err)
 	}
@@ -911,7 +911,7 @@ func TestJailbreakImportURLRefusesPrivateByDefault(t *testing.T) {
 
 	imp := newJailbreakImporter()
 	imp.allowPrivate = false
-	if _, err := imp.importPresets(t.Context(), repo, srv.URL+"/SOUL.md"); err == nil {
+	if _, err := imp.importPresets(t.Context(), repo, srv.URL+"/SOUL.md", ""); err == nil {
 		t.Fatal("importPresets reached a loopback address without the opt-in")
 	}
 	presets, err := repo.ListJailbreakPresets()
