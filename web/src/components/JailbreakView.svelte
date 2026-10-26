@@ -1421,26 +1421,30 @@
     icon="troubleshoot"
   >
 
-    <div class="flex flex-wrap items-center gap-3">
-      <input
-        type="text"
-        bind:value={testMatchId}
-        placeholder="providerx/deepseek-4-pro, or a combo name"
-        aria-label="Model id to test"
-        onkeydown={(e) => e.key === 'Enter' && runTestMatch()}
-        class="flex-1 min-w-[280px] px-3 py-2 rounded-[10px] bg-surface-2 border border-border-subtle text-sm text-text-main font-code placeholder:text-text-subtle"
-      />
-      <Button variant="primary" size="md" onclick={runTestMatch} disabled={testMatchLoading}>
-        {testMatchLoading ? 'Checking…' : 'Check'}
-      </Button>
-    </div>
-    {#if testMatchError}<p class="text-xs text-error">{testMatchError}</p>{/if}
-    {#if testMatchResult}
-      <div
-        class="p-3 rounded-[10px] border space-y-1 {testMatchResult.injected
-          ? 'border-success/40 bg-success/5'
-          : 'border-border bg-surface-2'}"
-      >
+    <!-- One rhythm for the whole panel: the input row, the verdict card, and
+         the payload preview are siblings, so they are spaced as siblings
+         rather than left touching. -->
+    <div class="space-y-4">
+      <div class="flex flex-wrap items-center gap-3">
+        <input
+          type="text"
+          bind:value={testMatchId}
+          placeholder="providerx/deepseek-4-pro, or a combo name"
+          aria-label="Model id to test"
+          onkeydown={(e) => e.key === 'Enter' && runTestMatch()}
+          class="flex-1 min-w-[280px] px-3 py-2 rounded-[10px] bg-surface-2 border border-border-subtle text-sm text-text-main font-code placeholder:text-text-subtle"
+        />
+        <Button variant="primary" size="md" onclick={runTestMatch} disabled={testMatchLoading}>
+          {testMatchLoading ? 'Checking…' : 'Check'}
+        </Button>
+      </div>
+      {#if testMatchError}<p class="text-xs text-error">{testMatchError}</p>{/if}
+      {#if testMatchResult}
+        <div
+          class="p-3 rounded-[10px] border space-y-1.5 {testMatchResult.injected
+            ? 'border-success/40 bg-success/5'
+            : 'border-border bg-surface-2'}"
+        >
         <div class="flex items-center gap-2">
           <span
             class="material-symbols-outlined text-[16px] {testMatchResult.injected ? 'text-success' : 'text-text-subtle'}"
@@ -1510,6 +1514,7 @@
         </div>
       {/if}
     {/if}
+    </div>
   </Modal>
 {/if}
 
