@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
-	"time"
 	"strings"
+	"time"
 )
 
 // JailbreakDoc is the agents.md-style injection document: one system prompt
@@ -197,7 +197,7 @@ func (r *Repo) DeleteJailbreakPreset(id string) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var toDelete []string
 	for rows.Next() {
@@ -239,7 +239,7 @@ func (r *Repo) ListJailbreakPresets() ([]*JailbreakDoc, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var presets []*JailbreakDoc
 	seenDefault := false
@@ -413,7 +413,7 @@ func (r *Repo) ListJailbreakModelConfigs() (map[string]JailbreakModelConfig, err
 				}
 			}
 		}
-		pRows.Close()
+		_ = pRows.Close()
 	}
 
 	rows, err := r.db.Query(
@@ -423,7 +423,7 @@ func (r *Repo) ListJailbreakModelConfigs() (map[string]JailbreakModelConfig, err
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := map[string]JailbreakModelConfig{}
 	var orphaned []string
 	for rows.Next() {

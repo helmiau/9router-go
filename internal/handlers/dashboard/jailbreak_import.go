@@ -270,7 +270,7 @@ func parseJailbreakImportTarget(target string) (jailbreakImportTarget, error) {
 	}
 	u, err := url.Parse(t)
 	if err != nil {
-		return jailbreakImportTarget{}, fmt.Errorf("%w: %v", errJailbreakBadTarget, err)
+		return jailbreakImportTarget{}, fmt.Errorf("%w: %w", errJailbreakBadTarget, err)
 	}
 	if isGithubHost(u.Hostname()) {
 		src, err := parseGithubURL(u)

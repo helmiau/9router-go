@@ -17,15 +17,30 @@
   // Preset editor.
   let presetModalOpen = $state(false)
   let editingId = $state<string | null>(null)
-  let presetForm = $state({
+  // The form is a subset of JailbreakDoc: id and name are editable here, the
+  // timestamps are the store's. Typing it against the doc rather than letting
+  // it infer keeps `order` — which the API accepts and the list sorts by —
+  // from being a type error the moment it is read.
+  let presetForm = $state<{
+    id: string
+    name: string
+    prompt: string
+    kind: string
+    geminiSafety: boolean
+    source: string
+    keywords: JailbreakKeyword[]
+    excludes: JailbreakKeyword[]
+    order: number
+  }>({
     id: '',
     name: '',
     prompt: '',
     kind: '',
     geminiSafety: false,
     source: '',
-    keywords: [] as JailbreakKeyword[],
-    excludes: [] as JailbreakKeyword[],
+    keywords: [],
+    excludes: [],
+    order: 0,
   })
   let presetSaving = $state(false)
   let presetError = $state('')
@@ -1462,7 +1477,7 @@
             <span class="text-xs text-text-muted">Outbound payload preview</span>
             <button
               type="button"
-              onclick={() => (previewOpen = !previewOpen)}
+              onclick={togglePreview}
               class="text-[11px] text-text-muted hover:text-brand-500 hover:underline"
             >
               {previewOpen ? 'Hide' : 'Show payload'}

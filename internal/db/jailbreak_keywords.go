@@ -341,7 +341,7 @@ func (r *Repo) buildJailbreakRuleset() (*jailbreakRuleset, error) {
 	for pRows.Next() {
 		var k, raw string
 		if err := pRows.Scan(&k, &raw); err != nil {
-			pRows.Close()
+			_ = pRows.Close()
 			return nil, fmt.Errorf("scan jailbreak preset: %w", err)
 		}
 		doc := parseJailbreakPresetRow(k, raw)
@@ -351,7 +351,7 @@ func (r *Repo) buildJailbreakRuleset() (*jailbreakRuleset, error) {
 		rs.presets[doc.ID] = doc
 	}
 	if err := pRows.Err(); err != nil {
-		pRows.Close()
+		_ = pRows.Close()
 		return nil, fmt.Errorf("list jailbreak presets: %w", err)
 	}
 	pRows.Close()
@@ -363,7 +363,7 @@ func (r *Repo) buildJailbreakRuleset() (*jailbreakRuleset, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list jailbreak bindings: %w", err)
 	}
-	defer mRows.Close()
+	defer func() { _ = mRows.Close() }()
 	for mRows.Next() {
 		var k, raw string
 		if err := mRows.Scan(&k, &raw); err != nil {
@@ -587,7 +587,7 @@ func (r *Repo) ExplainJailbreakDoc(ids ...string) (*JailbreakMatch, error) {
 		PresetID:   presetID,
 		PresetName: name,
 		Keyword:    rs.rules[best].text,
-		MatchedID: bestID,
+		MatchedID:  bestID,
 		Detail:     "A keyword rule matched this id.",
 	}, nil
 }
