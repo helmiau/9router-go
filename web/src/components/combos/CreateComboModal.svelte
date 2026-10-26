@@ -449,7 +449,7 @@
           {#if loadDelta}
             <span class="text-[10px] {loadDelta.added > 0 || loadDelta.removed > 0 ? 'text-text-muted' : 'text-text-subtle'}">
               {loadDelta.added > 0 || loadDelta.removed > 0
-                ? `+${loadDelta.added} matched${loadDelta.added === 1 ? '' : 's'}${loadDelta.removed > 0 ? `, −${loadDelta.removed} stale` : ''}`
+                ? `+${loadDelta.added} match${loadDelta.added === 1 ? '' : 'es'}${loadDelta.removed > 0 ? `, −${loadDelta.removed} stale` : ''}`
                 : 'already up to date'}
             </span>
           {/if}
