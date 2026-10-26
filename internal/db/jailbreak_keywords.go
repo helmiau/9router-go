@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -331,7 +332,7 @@ func (r *Repo) buildJailbreakRuleset() (*jailbreakRuleset, error) {
 		presetExcludes: map[string][]jailbreakKeywordRule{},
 	}
 
-	pRows, err := r.db.Query(
+	pRows, err := r.db.QueryContext(context.Background(),
 		`SELECT key, value FROM kv WHERE scope = ? AND (key LIKE ? OR key = ?)`,
 		jailbreakScope, jailbreakDocPrefix+"%", jailbreakDocKey,
 	)
@@ -354,7 +355,7 @@ func (r *Repo) buildJailbreakRuleset() (*jailbreakRuleset, error) {
 		return nil, fmt.Errorf("list jailbreak presets: %w", err)
 	}
 
-	mRows, err := r.db.Query(
+	mRows, err := r.db.QueryContext(context.Background(),
 		`SELECT key, value FROM kv WHERE scope = ? AND key LIKE ?`,
 		jailbreakScope, jailbreakModelPrefix+"%",
 	)
@@ -433,7 +434,8 @@ func (r *Repo) buildJailbreakRuleset() (*jailbreakRuleset, error) {
 // says. An empty list means nothing is excluded.
 func (r *Repo) GetJailbreakExcludes() ([]JailbreakKeyword, error) {
 	var raw string
-	err := r.db.QueryRow(
+	err := r.db.QueryRowContext(
+		context.Background(),
 		`SELECT value FROM kv WHERE scope = ? AND key = ? LIMIT 1`,
 		jailbreakScope, jailbreakExcludeKey,
 	).Scan(&raw)
@@ -460,7 +462,7 @@ func (r *Repo) SaveJailbreakExcludes(rules []JailbreakKeyword) error {
 	if err != nil {
 		return err
 	}
-	if _, err := r.db.Exec(
+	if _, err := r.db.ExecContext(context.Background(),
 		`INSERT INTO kv (scope, key, value) VALUES (?, ?, ?)
 		 ON CONFLICT(scope, key) DO UPDATE SET value = excluded.value`,
 		jailbreakScope, jailbreakExcludeKey, string(raw),

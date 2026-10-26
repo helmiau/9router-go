@@ -476,7 +476,7 @@ func TestJailbreakDuplicateAndReorder(t *testing.T) {
 		t.Fatalf("duplicate status = %d, want 200: %s", rec.Code, rec.Body.String())
 	}
 	var dup struct {
-		Ok      bool           `json:"ok"`
+		Ok     bool            `json:"ok"`
 		Preset db.JailbreakDoc `json:"preset"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &dup); err != nil {

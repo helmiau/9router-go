@@ -5,13 +5,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
-	"sort"
 
 	"9router/proxy/internal/handlers/chat"
-	
 
 	"github.com/go-chi/chi/v5"
 
@@ -329,14 +328,14 @@ func (h *DashboardHandler) HandleDuplicateJailbreakPreset(w http.ResponseWriter,
 		return
 	}
 	clone := &db.JailbreakDoc{
-		ID:            newID,
-		Name:          src.Name + " (copy)",
-		Prompt:        src.Prompt,
-		Kind:          src.Kind,
-		GeminiSafety:  src.GeminiSafety,
-		Source:        src.Source,
-		Keywords:      src.Keywords,
-		Excludes:      src.Excludes,
+		ID:           newID,
+		Name:         src.Name + " (copy)",
+		Prompt:       src.Prompt,
+		Kind:         src.Kind,
+		GeminiSafety: src.GeminiSafety,
+		Source:       src.Source,
+		Keywords:     src.Keywords,
+		Excludes:     src.Excludes,
 	}
 	if err := h.Repo.SaveJailbreakPreset(clone); err != nil {
 		handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
@@ -392,9 +391,7 @@ func (h *DashboardHandler) HandlePreviewJailbreak(w http.ResponseWriter, r *http
 	// The preview carries the caller's own messages, so an empty list is a
 	// caller mistake rather than a reason to invent content.
 	msgs := make([]map[string]any, 0, len(req.Messages)+1)
-	for _, m := range req.Messages {
-		msgs = append(msgs, m)
-	}
+	msgs = append(msgs, req.Messages...)
 	out := map[string]any{
 		"injected": match.Injected,
 		"reason":   match.Reason,

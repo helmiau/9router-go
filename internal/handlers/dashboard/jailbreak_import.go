@@ -561,7 +561,7 @@ func (imp *jailbreakImporter) collectFiles(ctx context.Context, src githubJailbr
 			skipped = append(skipped, jailbreakImportRefusal{Path: e.Path, Reason: fmt.Sprintf("import is capped at %d bytes total", maxJailbreakImportTotalBytes)})
 		default:
 			total += e.Size
-			files = append(files, githubFile{Path: e.Path, Size: e.Size})
+			files = append(files, githubFile(e))
 		}
 	}
 	if len(files) == 0 {

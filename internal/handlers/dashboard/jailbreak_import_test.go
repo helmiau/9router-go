@@ -264,10 +264,10 @@ func newFakeGithub(t *testing.T, files map[string]string) *fakeGithub {
 	fg := &fakeGithub{tree: files}
 
 	fg.api = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/repos/owner/repo":
+		switch r.URL.Path {
+		case "/repos/owner/repo":
 			fmt.Fprint(w, `{"default_branch":"main"}`)
-		case r.URL.Path == "/repos/owner/repo/git/trees/main":
+		case "/repos/owner/repo/git/trees/main":
 			var b strings.Builder
 			b.WriteString(`{"truncated":false,"tree":[`)
 			first := true
