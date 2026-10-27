@@ -6,6 +6,7 @@ import (
 	"9router/proxy/internal/db"
 	"9router/proxy/internal/handlers/shared"
 	"9router/proxy/internal/middleware"
+	"9router/proxy/internal/modelhealth"
 	"9router/proxy/internal/observ"
 	"9router/proxy/internal/semanticcache"
 	"github.com/go-chi/chi/v5"
@@ -29,6 +30,18 @@ type DashboardHandler struct {
 	// is optional: a handler built outside a boot (tests, tooling) has none, and
 	// the live usage fields then read zero rather than being invented.
 	Limiter *middleware.RateLimiter
+	// ModelHealth is the automatic model-health loop. It is optional for the
+	// same reason Limiter is: a handler built outside a boot has none, and the
+	// operator-action recording the disabled-models write performs is skipped
+	// rather than invented. Wiring it matters — without it a model the operator
+	// re-enables stays marked scheduler-owned, so the loop either refuses to
+	// disable it again or silently re-enables it on the next good probe.
+	//
+	// It is read per request rather than snapshotted: the router is built
+	// before the app's OnStart hook starts the scheduler, so a handler that
+	// captured the loop at construction would hold nil in production and
+	// record nothing.
+	ModelHealth *modelhealth.Loop
 }
 
 // NewDashboardHandler initializes a DashboardHandler with the provided Repo.
