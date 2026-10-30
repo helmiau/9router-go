@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -78,11 +79,29 @@ func apiKeyDisplay(k *models.APIKey) string {
 
 // maskClientKey shows the first/last few chars of a client key (dashboard
 // display only).
+//
+// The mask keeps the key's exact length. Collapsing the middle to a single
+// ellipsis told the reader two things it had no business knowing: that the key
+// was longer than twelve characters, and roughly how much longer. A mask whose
+// length tracks the thing it hides is not a mask — it is a length oracle.
+//
+// Keeping the count also means a revealed key and its mask occupy the same
+// width, so the row does not reflow when the operator presses reveal and the
+// buttons beside the value stay where they were.
+//
+// Rune counts and rune slicing, not byte: a key carrying a multi-byte character
+// would otherwise be cut mid-rune, which produces invalid UTF-8 in the JSON
+// response body.
 func maskClientKey(key string) string {
-	if len(key) <= 12 {
+	n := utf8.RuneCountInString(key)
+	if n <= 12 {
 		return "***"
 	}
-	return key[:6] + "…" + key[len(key)-4:]
+	const prefix = 6
+	const suffix = 4
+	return string([]rune(key)[:prefix]) +
+		strings.Repeat("•", n-prefix-suffix) +
+		string([]rune(key)[n-suffix:])
 }
 
 // intOrZero unwraps an optional int column, treating NULL and 0 alike: both

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestLookupHash(t *testing.T) {
@@ -93,12 +94,23 @@ func TestMask(t *testing.T) {
 	}{
 		{"", "***"},
 		{"short", "***"},
-		{"sk-abcdefghijkl", "sk-a…ijkl"},
-		{"sk-0123456789abcdef", "sk-0…cdef"},
+		// The mask keeps the plaintext's exact length: a shorter one would tell
+		// the reader how long the secret is, which is itself a leak.
+		{"sk-abcdefghijkl", "sk-a•••••••ijkl"},
+		{"sk-0123456789abcdef", "sk-0•••••••••••cdef"},
 	}
 	for _, tc := range cases {
-		if got := Mask(tc.in); got != tc.want {
+		got := Mask(tc.in)
+		if got != tc.want {
 			t.Fatalf("Mask(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+		// Only the masked cases must preserve length. The short ones collapse to
+		// a fixed sentinel on purpose — there is nothing to show and nothing to
+		// measure. Rune count, not byte count: the bullet is three bytes in
+		// UTF-8, so len() would report a mask three times longer than the secret
+		// and fail on a correct implementation.
+		if got != MaskedUnknown && utf8.RuneCountInString(got) != utf8.RuneCountInString(tc.in) {
+			t.Fatalf("Mask(%q) rune length = %d, want %d — the mask must not reveal the secret's length", tc.in, utf8.RuneCountInString(got), utf8.RuneCountInString(tc.in))
 		}
 	}
 	if strings.Contains(Mask("sk-0123456789abcdef"), "12345678") {
