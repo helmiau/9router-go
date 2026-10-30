@@ -81,11 +81,24 @@ func Verify(plaintext, encoded string) bool {
 
 // Mask renders a non-reversible display value, e.g. "sk-a…wxyz". Short or
 // empty input collapses to "***" so no useful entropy leaks.
+//
+// The mask keeps the plaintext's exact length. Collapsing the middle to a
+// single ellipsis told the reader two things it had no business knowing: that
+// the secret was longer than twelve characters, and roughly how much longer. A
+// mask whose length tracks the thing it hides is not a mask — it is a length
+// oracle.
+//
+// Keeping the count also means a revealed secret and its mask occupy the same
+// width, so the dashboard row does not reflow when the operator presses reveal
+// and the buttons beside the value stay where they were. The dashboard's own
+// maskClientKey uses the same 6/4 split for the same reason.
 func Mask(plaintext string) string {
 	if len(plaintext) <= maskMinLen {
 		return MaskedUnknown
 	}
-	return plaintext[:maskPrefixLen] + "…" + plaintext[len(plaintext)-maskSuffixLen:]
+	return plaintext[:maskPrefixLen] +
+		strings.Repeat("•", len(plaintext)-maskPrefixLen-maskSuffixLen) +
+		plaintext[len(plaintext)-maskSuffixLen:]
 }
 
 // decodeVerifier parses a PHC argon2id string. ok is false for anything
