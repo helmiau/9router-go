@@ -3,9 +3,11 @@
 package tunnel
 
 import (
+	"context"
 	"os/exec"
 	"strconv"
 	"syscall"
+	"time"
 )
 
 // configureDetached puts cloudflared in its own session, so it survives the
@@ -32,5 +34,8 @@ func killCloudflaredByPort(port int) {
 	pattern := "cloudflared.*:" + strconv.Itoa(port) + "([^0-9]|$)"
 	// pkill exits non-zero when nothing matched, which is the normal case on
 	// a machine with no tunnel running. That is not an error worth surfacing.
-	_ = exec.Command("pkill", "-f", pattern).Run()
+	// The timeout bounds a pkill that hangs on a signal it cannot deliver.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = exec.CommandContext(ctx, "pkill", "-f", pattern).Run()
 }
