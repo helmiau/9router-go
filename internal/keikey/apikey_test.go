@@ -98,11 +98,21 @@ func TestMask(t *testing.T) {
 		// the reader how long the secret is, which is itself a leak.
 		{"sk-abcdefghijkl", "sk-a•••••••ijkl"},
 		{"sk-0123456789abcdef", "sk-0•••••••••••cdef"},
+		// A multi-byte rune straddling the suffix cut. The byte-slicing form
+		// this replaced cut inside the rune and produced invalid UTF-8, which
+		// encoding/json/v2 rejects mid-encode — the 200 header is already on
+		// the wire by then, so the client gets a half-written body. The
+		// rune-count assertion above passes on ASCII alone, so without this
+		// case it never sees the class of input that breaks.
+		{"sk-abcdefghijklmnop😀z", "sk-a•••••••••••••op😀z"},
 	}
 	for _, tc := range cases {
 		got := Mask(tc.in)
 		if got != tc.want {
 			t.Fatalf("Mask(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+		if !utf8.ValidString(got) {
+			t.Fatalf("Mask(%q) = %q is not valid UTF-8; the JSON encoder would abort mid-body", tc.in, got)
 		}
 		// Only the masked cases must preserve length. The short ones collapse to
 		// a fixed sentinel on purpose — there is nothing to show and nothing to

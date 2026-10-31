@@ -71,7 +71,7 @@
 
   // Issue #310: Copy used to take `renderedKey`, which resolves to the masked
   // `keyDisplay` for every row that was not already revealed — so copying a key
-  // straight off a freshly loaded dashboard put `sk-c07…c93e` on the clipboard
+  // straight off a freshly loaded dashboard put a masked value on the clipboard
   // and the pasted credential 401'd. Copying a secret must not depend on whether
   // it happened to be on screen, so it reads the plaintext and ignores the
   // reveal state.
