@@ -1,6 +1,10 @@
 <div align="center">
 
-# 9router-go — FREE AI Router & Token Saver (Single Binary)
+<img src="web/public/icons/icon-512.svg" alt="9router-go" width="160" height="160">
+
+# 9router-go
+
+### FREE AI Router & Token Saver with Single Binary
 
 **Never stop coding. Save 20-40% tokens with RTK + auto-fallback to FREE & cheap AI models.**
 
