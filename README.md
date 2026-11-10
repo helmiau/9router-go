@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="web/public/icons/icon-512.svg" alt="9router-go" width="160" height="160">
+![9router-go](docs/logo.svg)
 
 # 9router-go
 

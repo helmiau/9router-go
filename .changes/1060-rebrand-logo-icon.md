@@ -21,6 +21,9 @@ public docs all show the same mark.
   two favicons and three inline wordmark glyphs. The mark now lives in one
   shared `brandMarkPNG` constant (`brand.go`) referenced by both templates, so
   the tab icon and every inline glyph can never drift back to drawing their own.
+- README header: the new mark now sits centred above the title, with the title
+  (`9router-go`) and subtitle (`FREE AI Router & Token Saver with Single Binary`)
+  split onto their own lines, via a display-size `docs/logo.svg`.
 - Updated the `sitegen` tests that pinned the old hub core (`#FF5C35`) to pin
   the shared brand mark instead, keeping the original contract: the pages must
   draw the product's own icon, not a stand-in.
