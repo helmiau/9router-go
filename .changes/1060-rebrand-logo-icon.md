@@ -10,8 +10,13 @@ public docs all show the same mark.
 - `web/public/favicon.svg`, `favicon.ico`, `icons/icon-{192,512}.png|.svg`: all
   six brand assets regenerated from the new mark. The `.svg` files keep their
   filenames (so `Sidebar`'s `/favicon.svg` default, `LoginView`, and
-  `manifest.webmanifest` references stay valid) and embed the optimized artwork
-  as a data URI, so they render identically to the source everywhere.
+  `manifest.webmanifest` references stay valid) and are **pure vector** - the
+  orange plate is an exact rounded rect and the glyph is traced into paths with
+  `fill-rule="evenodd"`, so the counters and the star cut-out are real holes and
+  the mark stays crisp at any size. The PNGs are palette-quantized and the ICO
+  carries only the essential sizes. Together this cuts the shipped brand-asset
+  weight from ~135 KB to ~40 KB (the SVGs alone from ~68 KB of embedded raster
+  to ~12 KB of paths).
 - `tools/sitegen`: the project page and wiki drew the old hub in five places -
   two favicons and three inline wordmark glyphs. The mark now lives in one
   shared `brandMarkPNG` constant (`brand.go`) referenced by both templates, so
