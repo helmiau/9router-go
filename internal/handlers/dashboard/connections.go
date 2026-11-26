@@ -1149,8 +1149,9 @@ func (h *DashboardHandler) HandleGetConnectionModels(w http.ResponseWriter, r *h
 	// plain import all ask the same question within seconds. serve collapses
 	// them into one upstream call and replays the answer for a minute, so the
 	// second open of a 460-model catalogue is not another 2.6 s round trip.
-	// Cache-Control: no-store below is set by the JSON writers; the replay sets
-	// X-Models-Cache so a hit is visible in the network panel.
+	// The cache is process-level, not an HTTP cache, so nothing here sets
+	// Cache-Control; the replay sets X-Models-Cache so a hit is visible in the
+	// network panel.
 	liveModelsCatalog.serve(w, r, id, func(cw http.ResponseWriter, cr *http.Request) {
 		h.writeConnectionModels(cw, cr, id)
 	})

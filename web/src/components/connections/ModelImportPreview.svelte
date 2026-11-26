@@ -210,6 +210,7 @@
   <div
     class="relative flex max-h-[96vh] w-full max-w-5xl flex-col overflow-hidden rounded-[14px] border border-border-subtle bg-surface shadow-[var(--shadow-elevated)] fade-in"
     role="dialog"
+    tabindex="-1"
     aria-modal="true"
     aria-labelledby="import-preview-title"
     onkeydown={(e) => { if (e.key === 'Escape') onClose() }}
