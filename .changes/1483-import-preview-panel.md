@@ -18,6 +18,11 @@
   (`Select all (11)`), with `Add all` / `Remove all` hidden when the filter
   leaves nothing to add or remove. `Test all` probes every matched model before
   an import; the destructive action stays last.
+- Clicking a chip's body selects it, and a selection narrows **every** bulk
+  action to the selected ids: the buttons relabel from `Add all (11)` to
+  `Add selected (2)` and act on exactly those two. Before this the selection was
+  decorative: `Add all` kept writing the whole filter and `Test all` kept probing
+  it, so a hand-picked subset could not be imported except one chip at a time.
 - A state split (`All` / `Not added` / `Added`) with live counts, sorting (`A–Z`,
   `Z–A`, `Latency: fastest`, `Latency: slowest`), and a client-side search with
   a clear button over a synthetic 460-model catalogue.
@@ -43,6 +48,20 @@
   pane; on a narrow viewport the search takes its own row below `sm`.
 
 ### Fixed
+- Bulk add carried no capability metadata: the bulk path stored
+  `{id, type}` per model while a single chip add forwarded `contextWindow`,
+  `maxOutput`, `vision` and `reasoning` from the fetched catalogue entry, so a
+  bulk import left rows the rest of the gateway could not size while the same
+  models added one by one were sized correctly. Both paths now read the staged
+  entry.
+- A catalogue fetch that was in flight while a connection was edited could write
+  the pre-edit body back into the cache after `invalidate` dropped it, so the
+  next sync was answered from the body the sync existed to bypass. The cache now
+  stamps a per-connection generation before calling `produce`, refuses the store
+  when an invalidation landed meanwhile, and forgets the `singleflight` key so a
+  request arriving after the sync starts its own fetch instead of joining the
+  older one. Pinned by
+  `TestModelsCatalogInvalidateDuringFlightDoesNotRestoreStaleBody`.
 - The provider-switch reset effect read `showImportPreview` through
   `closeImportPreviewOnProviderSwitch()`, making the effect depend on the panel
   state and re-run the moment `openImportPreview` set it: the modal closed
@@ -56,7 +75,7 @@
 
 ### Performance
 - `GET /api/providers/{id}/models` is served through a process-level catalogue
-  cache (60s TTL, 200 entries, one body per connection) with `singleflight.Do`
+  cache (60s TTL, 64 entries, one body per connection) with `singleflight.Do`
   collapsing concurrent misses, so reopening the panel and opening the same
   connection in two tabs cost one upstream call instead of one per click.
   Responses carry `X-Models-Cache: hit|miss`. Editing or deleting a connection
@@ -65,7 +84,8 @@
 
 ### Verified
 - `go test ./internal/handlers/dashboard/` (cache TTL, error non-caching,
-  concurrency collapse, eviction, invalidate-on-edit/delete, writer defaults).
+  concurrency collapse, eviction, invalidate-on-edit/delete, writer defaults,
+  invalidate-during-flight).
 - `cd web && bun test src scripts` 1062 pass; `bun run ratchet:svelte` 0
   unresolved identifiers, 0 errors; `bunx oxlint --deny-warnings` clean;
   `bun run build` + `go build` OK; `go test ./web/...` OK.
@@ -73,7 +93,10 @@
   fake 3-model upstream: the button opens the panel and `/api/models/custom`
   stays empty, the badge reads 3, search `dee` narrows it to 2, a chip's + lands
   exactly that one id and flips the chip to "Added", its trash empties the list
-  again. Fails on `main` (`[role="dialog"]` never appears), passes here.
+  again. A second case selects one chip and asserts the action row reads
+  `Add selected (1)` / `Test selected (1)` and that clicking it stores only that
+  id, which is the selection bug this fixed. Fails on `main` (`[role="dialog"]`
+  never appears), passes here.
 - `web/e2e/modelImportNameConflict.test.ts` still pins the loop walking past an
   id a bare-name alias owns; its apply step is now `Add all`.
 - Full `bun run e2e`: 107 tests, 0 failures.
@@ -88,4 +111,4 @@
   body overflow 0px at 1280x720; light and dark themes and a 390px viewport
   checked; console clean.
 
-Closes #1482
+Closes #1482 (issue; this PR is #1483)
